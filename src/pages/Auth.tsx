@@ -61,6 +61,7 @@ export default function Auth() {
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot" | "reset">("signin");
   const [passwordStrength, setPasswordStrength] = useState<PasswordStrength>({
     score: 0,
     isValid: false,
@@ -73,6 +74,19 @@ export default function Auth() {
   useEffect(() => {
     // Check if user is already logged in
     const checkUser = async () => {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const isRecovery = 
+        searchParams.get("type") === "recovery" || 
+        hashParams.get("type") === "recovery" ||
+        window.location.hash.includes("type=recovery") ||
+        window.location.href.includes("recovery");
+
+      if (isRecovery) {
+        setMode("reset");
+        return;
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         navigate("/");
@@ -80,6 +94,18 @@ export default function Auth() {
     };
     checkUser();
   }, [navigate]);
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setMode("reset");
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const handlePasswordChange = (newPassword: string) => {
     setPassword(newPassword);
@@ -181,6 +207,80 @@ export default function Auth() {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    const redirectUrl = `${window.location.origin}/auth?type=recovery`;
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: redirectUrl,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setError(error.message);
+      toast({
+        title: "Reset Request Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Reset Link Sent",
+        description: "Check your email for the password reset link.",
+      });
+      setMode("signin");
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+
+    // SECURITY FIX: Validate password strength before reset
+    const strength = validatePasswordStrength(password);
+    if (!strength.isValid) {
+      setError("Password does not meet security requirements");
+      setLoading(false);
+      toast({
+        title: "Password Too Weak",
+        description: "Please ensure your password meets all requirements",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const { error } = await supabase.auth.updateUser({
+      password: password,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setError(error.message);
+      toast({
+        title: "Password Update Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Password Updated",
+        description: "Your password has been successfully updated. Please sign in with your new password.",
+      });
+      // Clear forms
+      setPassword("");
+      setMode("signin");
+      // Log out to clear any temporary recovery session
+      await supabase.auth.signOut();
+      navigate("/auth");
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background/80 to-primary/5 p-4">
       <div className="w-full max-w-md">
@@ -195,34 +295,28 @@ export default function Auth() {
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Authentication</CardTitle>
-            <CardDescription>
-              Sign in to your account or create a new one to get started
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {error && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            <Tabs defaultValue="signin" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="signin">Sign In</TabsTrigger>
-                <TabsTrigger value="signup">Sign Up</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="signin" className="space-y-4">
-                <form onSubmit={handleSignIn} className="space-y-4">
+          {mode === "forgot" ? (
+            <>
+              <CardHeader>
+                <CardTitle>Forgot Password</CardTitle>
+                <CardDescription>
+                  Enter your email address and we'll send you a password reset link
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {error && (
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <form onSubmit={handleForgotPassword} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="signin-email">Email</Label>
+                    <Label htmlFor="forgot-email">Email</Label>
                     <div className="relative">
                       <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                       <Input
-                        id="signin-email"
+                        id="forgot-email"
                         type="email"
                         placeholder="Enter your email"
                         value={email}
@@ -232,69 +326,45 @@ export default function Auth() {
                       />
                     </div>
                   </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="signin-password">Password</Label>
-                    <div className="relative">
-                      <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        id="signin-password"
-                        type="password"
-                        placeholder="Enter your password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="pl-10"
-                        required
-                      />
-                    </div>
-                  </div>
-
                   <Button type="submit" className="w-full" disabled={loading}>
-                    {loading ? "Signing In..." : "Sign In"}
+                    {loading ? "Sending link..." : "Send Reset Link"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      setMode("signin");
+                      setError("");
+                    }}
+                  >
+                    Back to Sign In
                   </Button>
                 </form>
-              </TabsContent>
-
-              <TabsContent value="signup" className="space-y-4">
-                <form onSubmit={handleSignUp} className="space-y-4">
+              </CardContent>
+            </>
+          ) : mode === "reset" ? (
+            <>
+              <CardHeader>
+                <CardTitle>Create New Password</CardTitle>
+                <CardDescription>
+                  Enter a strong new password for your account
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {error && (
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <form onSubmit={handleResetPassword} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="signup-name">Full Name</Label>
-                    <div className="relative">
-                      <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        id="signup-name"
-                        type="text"
-                        placeholder="Enter your full name"
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        className="pl-10"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-email">Email</Label>
-                    <div className="relative">
-                      <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        id="signup-email"
-                        type="email"
-                        placeholder="Enter your email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="pl-10"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="signup-password">Password</Label>
+                    <Label htmlFor="reset-password">New Password</Label>
                     <div className="relative">
                       <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                       <Input
-                        id="signup-password"
+                        id="reset-password"
                         type="password"
                         placeholder="Create a strong password"
                         value={password}
@@ -303,8 +373,8 @@ export default function Auth() {
                         required
                       />
                     </div>
-                    
-                    {/* SECURITY FIX: Password strength feedback */}
+
+                    {/* Password strength feedback */}
                     {password && (
                       <div className="mt-2 space-y-2">
                         <div className="flex gap-1">
@@ -340,18 +410,200 @@ export default function Auth() {
                       </div>
                     )}
                   </div>
-
                   <Button 
                     type="submit" 
                     className="w-full" 
                     disabled={loading || (password && !passwordStrength.isValid)}
                   >
-                    {loading ? "Creating Account..." : "Create Account"}
+                    {loading ? "Updating Password..." : "Update Password"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      setMode("signin");
+                      setError("");
+                    }}
+                  >
+                    Back to Sign In
                   </Button>
                 </form>
-              </TabsContent>
-            </Tabs>
-          </CardContent>
+              </CardContent>
+            </>
+          ) : (
+            <>
+              <CardHeader>
+                <CardTitle>Authentication</CardTitle>
+                <CardDescription>
+                  Sign in to your account or create a new one to get started
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {error && (
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                <Tabs defaultValue="signin" className="w-full">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="signin">Sign In</TabsTrigger>
+                    <TabsTrigger value="signup">Sign Up</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="signin" className="space-y-4">
+                    <form onSubmit={handleSignIn} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="signin-email">Email</Label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="signin-email"
+                            type="email"
+                            placeholder="Enter your email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="pl-10"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label htmlFor="signin-password">Password</Label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setMode("forgot");
+                              setError("");
+                            }}
+                            className="text-xs text-primary hover:underline cursor-pointer bg-transparent border-0 p-0"
+                          >
+                            Forgot password?
+                          </button>
+                        </div>
+                        <div className="relative">
+                          <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="signin-password"
+                            type="password"
+                            placeholder="Enter your password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="pl-10"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <Button type="submit" className="w-full" disabled={loading}>
+                        {loading ? "Signing In..." : "Sign In"}
+                      </Button>
+                    </form>
+                  </TabsContent>
+
+                  <TabsContent value="signup" className="space-y-4">
+                    <form onSubmit={handleSignUp} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="signup-name">Full Name</Label>
+                        <div className="relative">
+                          <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="signup-name"
+                            type="text"
+                            placeholder="Enter your full name"
+                            value={fullName}
+                            onChange={(e) => setFullName(e.target.value)}
+                            className="pl-10"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="signup-email">Email</Label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="signup-email"
+                            type="email"
+                            placeholder="Enter your email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="pl-10"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="signup-password">Password</Label>
+                        <div className="relative">
+                          <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            id="signup-password"
+                            type="password"
+                            placeholder="Create a strong password"
+                            value={password}
+                            onChange={(e) => handlePasswordChange(e.target.value)}
+                            className="pl-10"
+                            required
+                          />
+                        </div>
+                        
+                        {/* SECURITY FIX: Password strength feedback */}
+                        {password && (
+                          <div className="mt-2 space-y-2">
+                            <div className="flex gap-1">
+                              {[...Array(5)].map((_, i) => (
+                                <div
+                                  key={i}
+                                  className={`h-1 flex-1 rounded-full ${
+                                    i < passwordStrength.score
+                                      ? 'bg-green-500'
+                                      : 'bg-gray-300'
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                            
+                            {passwordStrength.errors.length > 0 && (
+                              <div className="space-y-1">
+                                {passwordStrength.errors.map((error, idx) => (
+                                  <div key={idx} className="flex items-center gap-2 text-xs text-red-600">
+                                    <XCircle className="h-3 w-3" />
+                                    {error}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            
+                            {passwordStrength.isValid && (
+                              <div className="flex items-center gap-2 text-xs text-green-600">
+                                <CheckCircle2 className="h-3 w-3" />
+                                Password strength is good
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <Button 
+                        type="submit" 
+                        className="w-full" 
+                        disabled={loading || (password && !passwordStrength.isValid)}
+                      >
+                        {loading ? "Creating Account..." : "Create Account"}
+                      </Button>
+                    </form>
+                  </TabsContent>
+                </Tabs>
+              </CardContent>
+            </>
+          )}
         </Card>
 
         <div className="text-center mt-6 text-sm text-muted-foreground">
