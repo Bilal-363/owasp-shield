@@ -1,0 +1,7 @@
+project_id = "ngjvwckatzhqpecdfeoe"
+
+[functions.scan-orchestrator]
+verify_jwt = true
+
+[functions.report-generator]
+verify_jwt = true
