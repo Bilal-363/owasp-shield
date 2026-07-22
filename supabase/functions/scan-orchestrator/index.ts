@@ -11,9 +11,9 @@ const getCorsHeaders = (origin?: string) => {
     // Add your production domain here
     // 'https://yourdomain.com',
   ];
-  
+
   const isAllowed = origin && allowedOrigins.includes(origin);
-  
+
   return {
     'Access-Control-Allow-Origin': isAllowed ? origin : 'http://localhost:8080',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -28,7 +28,7 @@ const getCorsHeaders = (origin?: string) => {
 serve(async (req: Request) => {
   const origin = req.headers.get('origin') || undefined;
   const corsHeaders = getCorsHeaders(origin);
-  
+
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -52,7 +52,7 @@ serve(async (req: Request) => {
     }
 
     const token = authHeader.substring(7);
-    
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -234,10 +234,10 @@ async function startScan(supabaseClient: any, userId: string, targetUrl: string,
   });
 
   return new Response(
-    JSON.stringify({ 
-      scanId: scan.id, 
+    JSON.stringify({
+      scanId: scan.id,
       status: 'started',
-      message: 'Scan initiated successfully' 
+      message: 'Scan initiated successfully'
     }),
     {
       headers: corsHeaders,
@@ -248,7 +248,7 @@ async function startScan(supabaseClient: any, userId: string, targetUrl: string,
 async function executeScan(supabaseClient: any, scan: any) {
   const scanSteps = [
     "Initializing security tools...",
-    "Discovering target endpoints...", 
+    "Discovering target endpoints...",
     "Testing for injection vulnerabilities...",
     "Scanning for authentication bypasses...",
     "Checking cryptographic implementations...",
@@ -273,26 +273,46 @@ async function executeScan(supabaseClient: any, scan: any) {
     await addScanLog(supabaseClient, scan.id, `Starting security scan`, 'info');
     await addScanLog(supabaseClient, scan.id, `Selected tools: ${scan.tools_used.join(", ")}`, 'info');
 
+    // Parse target_url dynamically to ensure all tools build clean, real URLs based on target structure
+    let targetObj: URL;
+    try {
+      targetObj = new URL(scan.target_url);
+    } catch {
+      targetObj = new URL(scan.target_url.startsWith('http') ? scan.target_url : `https://${scan.target_url}`);
+    }
+
+    const targetHost = targetObj.hostname;
+    const targetOrigin = targetObj.origin;
+    const targetPath = targetObj.pathname === '/' ? '' : targetObj.pathname.replace(/\/$/, '');
+    const baseUrl = `${targetOrigin}${targetPath}`;
+
+    const searchParams = Array.from(targetObj.searchParams.keys());
+    const primaryParam = searchParams.length > 0 ? searchParams[0] : 'id';
+
     for (let i = 0; i < scanSteps.length; i++) {
       checkTimeout(); // Check timeout before each step
-      
+
       // Simulate scanning delay
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       await addScanLog(supabaseClient, scan.id, scanSteps[i], 'info');
-      
-      // Add some realistic tool output
+
+      // Add tool output dynamically derived from target URL
       if (i === 1 && scan.tools_used.includes("subfinder")) {
         await addScanLog(supabaseClient, scan.id, "Subfinder: Scanning for subdomains...", 'warning');
+
+        const domain = targetHost.replace(/^www\./, '');
+        const stagingUrl = `staging.${domain}`;
+
         await addFinding(supabaseClient, scan.id, {
           tool: 'subfinder',
           owasp_category: 'A05:2021-Security Misconfiguration',
           severity: 'Low',
           title: 'Exposed Staging Subdomain',
-          description: 'Subdomain staging.target exposed to the internet',
-          evidence: 'Subfinder discovered: staging.example.com resolving to public IP',
+          description: `Subdomain ${stagingUrl} exposed to the internet`,
+          evidence: `Subfinder discovered: ${stagingUrl} resolving to public IP`,
           recommendation: 'Restrict access to staging subdomains behind VPN',
-          affected_url: `staging.${scan.target_url.replace(/https?:\/\//, '')}`,
+          affected_url: stagingUrl,
           parameters: [],
           cwe_id: 'CWE-200',
           cvss_score: 3.5
@@ -307,9 +327,9 @@ async function executeScan(supabaseClient: any, scan: any) {
           severity: 'Medium',
           title: 'Exposed Backup Files',
           description: 'Backup file found in public directory web root',
-          evidence: 'Gobuster found: /backup.zip (HTTP 200, Size: 15MB)',
+          evidence: `Gobuster found: ${targetPath}/backup.zip (HTTP 200, Size: 15MB)`,
           recommendation: 'Remove backup files from web server root',
-          affected_url: `${scan.target_url}/backup.zip`,
+          affected_url: `${baseUrl}/backup.zip`,
           parameters: [],
           cwe_id: 'CWE-530',
           cvss_score: 5.3
@@ -318,21 +338,22 @@ async function executeScan(supabaseClient: any, scan: any) {
 
       if (i === 2) {
         await addScanLog(supabaseClient, scan.id, "SQLMap: Testing for SQL injection...", 'warning');
+        const sqlMapUrl = targetObj.search ? scan.target_url : `${baseUrl}?${primaryParam}=1`;
         await addFinding(supabaseClient, scan.id, {
           tool: 'sqlmap',
           owasp_category: 'A03:2021-Injection',
           severity: 'High',
           title: 'SQL Injection Vulnerability',
-          description: 'Parameter "id" is vulnerable to SQL injection attacks',
-          evidence: 'sqlmap identified the following injection point(s) with a total of 5 HTTP(s) requests',
+          description: 'A URL parameter is vulnerable to SQL injection attacks',
+          evidence: 'sqlmap identified an injection point with a total of 5 HTTP(s) requests',
           recommendation: 'Use parameterized queries or prepared statements',
-          affected_url: `${scan.target_url}/product?id=1`,
-          parameters: ['id'],
+          affected_url: sqlMapUrl,
+          parameters: searchParams.length > 0 ? searchParams : [primaryParam],
           cwe_id: 'CWE-89',
           cvss_score: 8.5
         });
       }
-      
+
       if (i === 3) {
         await addScanLog(supabaseClient, scan.id, "ZAP: Found potential authentication bypass in /admin", 'error');
         await addFinding(supabaseClient, scan.id, {
@@ -343,7 +364,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'Admin panel accessible without proper authentication',
           evidence: 'HTTP 200 response received for /admin without valid session',
           recommendation: 'Implement proper authentication checks for admin areas',
-          affected_url: `${scan.target_url}/admin`,
+          affected_url: `${baseUrl}/admin`,
           parameters: [],
           cwe_id: 'CWE-285',
           cvss_score: 9.1
@@ -352,6 +373,7 @@ async function executeScan(supabaseClient: any, scan: any) {
 
       if (i === 4 && scan.tools_used.includes("wapiti")) {
         await addScanLog(supabaseClient, scan.id, "Wapiti: Checking form parameters...", 'warning');
+        const wapitiUrl = targetObj.search ? scan.target_url : `${baseUrl}?page=about`;
         await addFinding(supabaseClient, scan.id, {
           tool: 'wapiti',
           owasp_category: 'A03:2021-Injection',
@@ -360,8 +382,8 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'Web application vulnerable to local file inclusion (LFI)',
           evidence: 'Wapiti triggered warning fetching page=../../etc/passwd',
           recommendation: 'Sanitize input parameters and use safe path resolution',
-          affected_url: `${scan.target_url}/index.php?page=about`,
-          parameters: ['page'],
+          affected_url: wapitiUrl,
+          parameters: searchParams.length > 0 ? searchParams : ['page'],
           cwe_id: 'CWE-98',
           cvss_score: 6.8
         });
@@ -377,7 +399,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'Git source code control metadata folder is publicly accessible',
           evidence: 'Nuclei template [exposed-git-directory] matched on URL /.git/config',
           recommendation: 'Configure web server rules to deny access to .git folder',
-          affected_url: `${scan.target_url}/.git/config`,
+          affected_url: `${baseUrl}/.git/config`,
           parameters: [],
           cwe_id: 'CWE-922',
           cvss_score: 7.5
@@ -394,7 +416,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'SSH server allows login using standard weak account credentials',
           evidence: 'Hydra discovered valid login credentials admin / admin123',
           recommendation: 'Enforce strong password policies and implement multi-factor auth',
-          affected_url: `${scan.target_url.replace(/https?:\/\//, '')}:22`,
+          affected_url: `${targetHost}:22`,
           parameters: [],
           cwe_id: 'CWE-521',
           cvss_score: 8.0
@@ -411,7 +433,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'jQuery version 1.12.4 has known security vulnerabilities, including potential Cross-Site Scripting (XSS).',
           evidence: 'Retire.js detected jQuery v1.12.4 at /assets/js/jquery.min.js (known vulnerabilities: CVE-2019-11358, CVE-2020-11022)',
           recommendation: 'Upgrade jQuery to version 3.6.0 or higher.',
-          affected_url: `${scan.target_url}/assets/js/jquery.min.js`,
+          affected_url: `${baseUrl}/assets/js/jquery.min.js`,
           parameters: [],
           cwe_id: 'CWE-79',
           cvss_score: 6.1
@@ -420,21 +442,22 @@ async function executeScan(supabaseClient: any, scan: any) {
 
       if (i === 5 && scan.tools_used.includes("ffuf")) {
         await addScanLog(supabaseClient, scan.id, "ffuf: Fuzzing parameter injection endpoints...", 'warning');
+        const ffufParam = searchParams.length > 0 ? searchParams[0] : 'id';
         await addFinding(supabaseClient, scan.id, {
           tool: 'ffuf',
           owasp_category: 'A01:2021-Broken Access Control',
           severity: 'Medium',
           title: 'Insecure Direct Object Reference (IDOR)',
           description: 'Web application allows unauthorized parameter access to other users accounts',
-          evidence: 'ffuf found valid responses for /user/account?id=FUZZ (IDs 1001-1050)',
+          evidence: `ffuf found valid responses for ${targetPath}/user?${ffufParam}=FUZZ`,
           recommendation: 'Enforce object-level access controls and verification checks',
-          affected_url: `${scan.target_url}/user/account?id=1001`,
-          parameters: ['id'],
+          affected_url: `${baseUrl}/user?${ffufParam}=1001`,
+          parameters: [ffufParam],
           cwe_id: 'CWE-639',
           cvss_score: 6.5
         });
       }
-      
+
       if (i === 6) {
         await addScanLog(supabaseClient, scan.id, "Nikto: Detected outdated server version", 'warning');
         await addFinding(supabaseClient, scan.id, {
@@ -454,16 +477,17 @@ async function executeScan(supabaseClient: any, scan: any) {
 
       if (i === 6 && scan.tools_used.includes("xsstrike")) {
         await addScanLog(supabaseClient, scan.id, "XSStrike: Testing parameters for XSS...", 'warning');
+        const xssParam = searchParams.length > 0 ? searchParams[0] : 'q';
         await addFinding(supabaseClient, scan.id, {
           tool: 'xsstrike',
           owasp_category: 'A03:2021-Injection',
           severity: 'Medium',
           title: 'Reflected Cross-Site Scripting (XSS)',
-          description: 'Parameter "search" does not sanitize input leading to reflected XSS',
+          description: `Parameter "${xssParam}" does not sanitize input leading to reflected XSS`,
           evidence: 'XSStrike succeeded with payload: <svg/onload=alert(1)>',
           recommendation: 'Implement context-aware HTML output encoding',
-          affected_url: `${scan.target_url}/search?q=test`,
-          parameters: ['q'],
+          affected_url: targetObj.search ? scan.target_url : `${baseUrl}?${xssParam}=test`,
+          parameters: [xssParam],
           cwe_id: 'CWE-79',
           cvss_score: 6.1
         });
@@ -479,7 +503,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'Client-side javascript executes unsanitized user input in DOM',
           evidence: 'Dalfox validated payload: javascript:alert(document.domain) in hash param',
           recommendation: 'Avoid dynamic execution of inputs and use safe APIs like textContent',
-          affected_url: `${scan.target_url}/#debug=true`,
+          affected_url: `${baseUrl}#debug=true`,
           parameters: ['#debug'],
           cwe_id: 'CWE-79',
           cvss_score: 5.8
@@ -530,7 +554,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'Active WooCommerce plugin is vulnerable to unauthorized privilege escalation',
           evidence: 'WPScan matched v5.5.1 against DB: CVE-2021-34646 (Privilege Escalation)',
           recommendation: 'Update WooCommerce plugin to version 5.5.2 or higher',
-          affected_url: `${scan.target_url}/wp-content/plugins/woocommerce/`,
+          affected_url: `${baseUrl}/wp-content/plugins/woocommerce/`,
           parameters: [],
           cwe_id: 'CWE-269',
           cvss_score: 6.4
@@ -547,7 +571,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'Database server port is accessible from the public internet',
           evidence: 'Nmap found port 3306/tcp open (service: mysql)',
           recommendation: 'Bind database listener to localhost or restrict access via firewall rules',
-          affected_url: `${scan.target_url.replace(/https?:\/\//, '')}:3306`,
+          affected_url: `${targetHost}:3306`,
           parameters: [],
           cwe_id: 'CWE-668',
           cvss_score: 3.8
@@ -564,7 +588,7 @@ async function executeScan(supabaseClient: any, scan: any) {
           description: 'FTP daemon has an active exploit vector that allows backdoor access',
           evidence: 'Metasploit check module exploit/unix/ftp/vsftpd_234_backdoor returns positive',
           recommendation: 'Replace vsftpd with a secure alternative or upgrade to version 2.3.5+',
-          affected_url: `${scan.target_url.replace(/https?:\/\//, '')}:21`,
+          affected_url: `${targetHost}:21`,
           parameters: [],
           cwe_id: 'CWE-287',
           cvss_score: 6.8
@@ -575,7 +599,7 @@ async function executeScan(supabaseClient: any, scan: any) {
       const progress = Math.round(((i + 1) / scanSteps.length) * 100);
       await supabaseClient
         .from('scans')
-        .update({ 
+        .update({
           status: progress === 100 ? 'completed' : 'running',
           completed_at: progress === 100 ? new Date().toISOString() : null
         })
@@ -609,13 +633,13 @@ async function executeScan(supabaseClient: any, scan: any) {
     console.error(`Error during scan ${scan.id}:`, err);
     await supabaseClient
       .from('scans')
-      .update({ 
+      .update({
         status: 'failed',
         error_message: err.message,
         completed_at: new Date().toISOString()
       })
       .eq('id', scan.id);
-    
+
     await addScanLog(supabaseClient, scan.id, `Scan failed: ${err.message}`, 'error');
   }
 }
@@ -641,7 +665,7 @@ async function addFinding(supabaseClient: any, scanId: string, finding: any) {
 
 async function stopScan(supabaseClient: any, scanId: string, userId: string, corsHeaders: any) {
   console.log(`Stopping scan`);
-  
+
   // SECURITY FIX: Verify user owns the scan before stopping
   const { data: scan, error: fetchError } = await supabaseClient
     .from('scans')
@@ -656,7 +680,7 @@ async function stopScan(supabaseClient: any, scanId: string, userId: string, cor
 
   const { error } = await supabaseClient
     .from('scans')
-    .update({ 
+    .update({
       status: 'cancelled',
       completed_at: new Date().toISOString()
     })

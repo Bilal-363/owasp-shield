@@ -22,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { escapeHtml } from "@/lib/utils";
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+// FIX #3: Removed html2canvas — PDF is now generated with proper text-based jsPDF
 
 interface ScanData {
   id: string;
@@ -200,27 +200,42 @@ const generateHTMLContent = (scans: ScanData[], findings: Finding[]) => {
       </div>
 
       <div style="margin: 30px 0;">
-        <h2 style="color:#00ffff;">Detailed Findings</h2>
-        ${selectedFindings.map(finding => `
-          <div style="border: 1px solid #333; padding: 20px; margin: 15px 0; border-radius: 8px; background:#111;">
-            <div style="display: flex; align-items: center; margin-bottom: 10px;">
-              <span style="background: ${
-                finding.severity === 'Critical' ? '#dc2626' :
-                finding.severity === 'High' ? '#d97706' :
-                '#ea580c'
-              }; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 10px;">
-                ${escapeHtml(finding.severity)}
-              </span>
-              <span style="background: #222; color:#00ffff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
-                ${escapeHtml(finding.owasp_category)}
-              </span>
-            </div>
-            <h3 style="margin: 10px 0; color:#00ffff;">${escapeHtml(finding.title)}</h3>
-            <p style="color: #aaa; margin: 10px 0;">${escapeHtml(finding.description)}</p>
-            ${finding.affected_url ? `<p><strong style="color:#00ffff;">Affected URL:</strong> ${escapeHtml(finding.affected_url)}</p>` : ''}
-            ${finding.recommendation ? `<div style="background: #001f33; color:#00ffff; padding: 15px; border-radius: 8px; margin: 10px 0;">
-              <strong>Recommendation:</strong> ${escapeHtml(finding.recommendation)}
-            </div>` : ''}
+        <h2 style="color:#00ffff;">Detailed Findings by Tool</h2>
+        ${selectedFindings.length === 0 ? '<p style="color: #aaa;">No vulnerabilities or findings reported for the selected scans.</p>' : ''}
+        ${Object.entries(
+          selectedFindings.reduce((acc: any, finding: Finding) => {
+            const t = finding.tool || 'Unknown';
+            if (!acc[t]) acc[t] = [];
+            acc[t].push(finding);
+            return acc;
+          }, {})
+        ).map(([toolName, toolFindings]: [string, any]) => `
+          <div style="margin-top: 30px; margin-bottom: 20px;">
+            <h3 style="color:#ffffff; border-bottom: 1px solid #333; padding-bottom: 5px; text-transform: uppercase;">
+              ${escapeHtml(toolName)} Findings
+            </h3>
+            ${toolFindings.map((finding: Finding) => `
+              <div style="border: 1px solid #333; padding: 20px; margin: 15px 0; border-radius: 8px; background:#111;">
+                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                  <span style="background: ${
+                    finding.severity === 'Critical' ? '#dc2626' :
+                    finding.severity === 'High' ? '#d97706' :
+                    finding.severity === 'Medium' ? '#ea580c' : '#2563eb'
+                  }; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 10px;">
+                    ${escapeHtml(finding.severity)}
+                  </span>
+                  <span style="background: #222; color:#00ffff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
+                    ${escapeHtml(finding.owasp_category)}
+                  </span>
+                </div>
+                <h3 style="margin: 10px 0; color:#00ffff;">${escapeHtml(finding.title)}</h3>
+                <p style="color: #aaa; margin: 10px 0;">${escapeHtml(finding.description)}</p>
+                ${finding.affected_url ? `<p><strong style="color:#00ffff;">Affected URL:</strong> ${escapeHtml(finding.affected_url)}</p>` : ''}
+                ${finding.recommendation ? `<div style="background: #001f33; color:#00ffff; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                  <strong>Recommendation:</strong> ${escapeHtml(finding.recommendation)}
+                </div>` : ''}
+              </div>
+            `).join('')}
           </div>
         `).join('')}
       </div>
@@ -303,76 +318,86 @@ const generateWordHTMLContent = (scans: ScanData[], findings: Finding[]) => {
 
       <div>
         <h2 style="color: #0f172a; font-size: 20px; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-bottom: 15px;">
-          Detailed Security Findings
+          Detailed Security Findings by Tool
         </h2>
         
         ${selectedFindings.length === 0 ? `
           <p style="color: #666666; font-style: italic;">No vulnerabilities or findings reported for the selected scans.</p>
-        ` : selectedFindings.map((finding, idx) => {
-          const sevColor = 
-            finding.severity === 'Critical' ? '#991b1b' :
-            finding.severity === 'High' ? '#c2410c' :
-            finding.severity === 'Medium' ? '#854d0e' : '#1e40af';
-          
-          const sevBg = 
-            finding.severity === 'Critical' ? '#fee2e2' :
-            finding.severity === 'High' ? '#ffedd5' :
-            finding.severity === 'Medium' ? '#fef9c3' : '#dbeafe';
+        ` : Object.entries(
+          selectedFindings.reduce((acc: any, finding: Finding) => {
+            const t = finding.tool || 'Unknown';
+            if (!acc[t]) acc[t] = [];
+            acc[t].push(finding);
+            return acc;
+          }, {})
+        ).map(([toolName, toolFindings]: [string, any]) => `
+          <div style="margin-bottom: 30px;">
+            <h3 style="color: #1e293b; font-size: 18px; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; margin-bottom: 15px; text-transform: uppercase;">
+              ${escapeHtml(toolName)} Findings
+            </h3>
+            ${toolFindings.map((finding: Finding, idx: number) => {
+              const sevColor = 
+                finding.severity === 'Critical' ? '#991b1b' :
+                finding.severity === 'High' ? '#c2410c' :
+                finding.severity === 'Medium' ? '#854d0e' : '#1e40af';
+              
+              const sevBg = 
+                finding.severity === 'Critical' ? '#fee2e2' :
+                finding.severity === 'High' ? '#ffedd5' :
+                finding.severity === 'Medium' ? '#fef9c3' : '#dbeafe';
 
-          return `
-            <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 20px; page-break-inside: avoid;">
-              <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
-                <tr>
-                  <td>
-                    <h3 style="margin: 0; color: #0f172a; font-size: 16px;">
-                      ${idx + 1}. ${escapeHtml(finding.title)}
-                    </h3>
-                  </td>
-                  <td style="text-align: right; width: 150px;">
-                    <span style="background-color: ${sevBg}; color: ${sevColor}; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; display: inline-block;">
-                      ${escapeHtml(finding.severity)}
-                    </span>
-                  </td>
-                </tr>
-              </table>
-              
-              <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 10px; background-color: #f8fafc;">
-                <tr>
-                  <td style="padding: 6px; width: 120px; font-weight: bold; color: #475569;">OWASP Category:</td>
-                  <td style="padding: 6px;">${escapeHtml(finding.owasp_category)}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 6px; font-weight: bold; color: #475569;">Tool Used:</td>
-                  <td style="padding: 6px; font-family: monospace;">${escapeHtml(finding.tool)}</td>
-                </tr>
-                ${finding.affected_url ? `
-                  <tr>
-                    <td style="padding: 6px; font-weight: bold; color: #475569;">Affected URL:</td>
-                    <td style="padding: 6px; font-family: monospace; color: #0284c7; word-break: break-all;">${escapeHtml(finding.affected_url)}</td>
-                  </tr>
-                ` : ''}
-                ${finding.cvss_score ? `
-                  <tr>
-                    <td style="padding: 6px; font-weight: bold; color: #475569;">CVSS v3 Score:</td>
-                    <td style="padding: 6px; font-weight: bold; color: #991b1b;">${escapeHtml(String(finding.cvss_score))}</td>
-                  </tr>
-                ` : ''}
-              </table>
-              
-              <p style="font-size: 14px; margin-top: 10px; margin-bottom: 10px; color: #334155;">
-                <strong>Description:</strong><br/>
-                ${escapeHtml(finding.description)}
-              </p>
-              
-              ${finding.recommendation ? `
-                <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 12px; border-radius: 6px; margin-top: 10px; color: #1e3a8a;">
-                  <strong>Remediation Recommendation:</strong><br/>
-                  ${escapeHtml(finding.recommendation)}
+              return `
+                <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; margin-bottom: 20px; page-break-inside: avoid;">
+                  <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+                    <tr>
+                      <td>
+                        <h4 style="margin: 0; color: #0f172a; font-size: 16px;">
+                          ${idx + 1}. ${escapeHtml(finding.title)}
+                        </h4>
+                      </td>
+                      <td style="text-align: right; width: 150px;">
+                        <span style="background-color: ${sevBg}; color: ${sevColor}; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; display: inline-block;">
+                          ${escapeHtml(finding.severity)}
+                        </span>
+                      </td>
+                    </tr>
+                  </table>
+                  
+                  <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 10px; background-color: #f8fafc;">
+                    <tr>
+                      <td style="padding: 6px; width: 120px; font-weight: bold; color: #475569;">OWASP Category:</td>
+                      <td style="padding: 6px;">${escapeHtml(finding.owasp_category)}</td>
+                    </tr>
+                    ${finding.affected_url ? `
+                      <tr>
+                        <td style="padding: 6px; font-weight: bold; color: #475569;">Affected URL:</td>
+                        <td style="padding: 6px; font-family: monospace; color: #0284c7; word-break: break-all;">${escapeHtml(finding.affected_url)}</td>
+                      </tr>
+                    ` : ''}
+                    ${finding.cvss_score ? `
+                      <tr>
+                        <td style="padding: 6px; font-weight: bold; color: #475569;">CVSS v3 Score:</td>
+                        <td style="padding: 6px; font-weight: bold; color: #991b1b;">${escapeHtml(String(finding.cvss_score))}</td>
+                      </tr>
+                    ` : ''}
+                  </table>
+                  
+                  <p style="font-size: 14px; margin-top: 10px; margin-bottom: 10px; color: #334155;">
+                    <strong>Description:</strong><br/>
+                    ${escapeHtml(finding.description)}
+                  </p>
+                  
+                  ${finding.recommendation ? `
+                    <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; padding: 12px; border-radius: 6px; margin-top: 10px; color: #1e3a8a;">
+                      <strong>Remediation Recommendation:</strong><br/>
+                      ${escapeHtml(finding.recommendation)}
+                    </div>
+                  ` : ''}
                 </div>
-              ` : ''}
-            </div>
-          `;
-        }).join('')}
+              `;
+            }).join('')}
+          </div>
+        `).join('')}
       </div>
     </div>
   `;
@@ -392,35 +417,258 @@ const generateWordHTMLContent = (scans: ScanData[], findings: Finding[]) => {
     const htmlContent = generateHTMLContent(availableReports, findings);
 
     if (reportFormat === "pdf") {
-      // PDF export
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = htmlContent;
-      tempDiv.style.position = "absolute";
-      tempDiv.style.left = "-9999px";
-      document.body.appendChild(tempDiv);
-
-      const canvas = await html2canvas(tempDiv);
-      const imgData = canvas.toDataURL("image/png");
+      // ================================================================
+      // FIX #3: Proper text-based PDF generation using jsPDF
+      // ================================================================
+      // Old approach: html2canvas screenshot → PNG image embedded in PDF
+      //   - Non-selectable text, bloated file size, awkward page breaks
+      // New approach: Direct jsPDF text rendering
+      //   - Selectable/searchable text, proper page breaks, small file size
+      // ================================================================
+      const selectedScanData = availableReports.filter(scan => selectedScans.includes(scan.id));
+      const selectedFindings = findings.filter(f => selectedScans.includes((f as any).scan_id));
 
       const pdf = new jsPDF();
-      const imgWidth = 210;
-      const pageHeight = 295;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 15;
+      const contentWidth = pageWidth - margin * 2;
+      let y = margin;
 
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+      const severityColors: Record<string, [number, number, number]> = {
+        'Critical': [220, 38, 38],
+        'High': [217, 119, 6],
+        'Medium': [234, 88, 12],
+        'Low': [37, 99, 235],
+        'Info': [107, 114, 128],
+      };
 
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+      // Helper: add page footer with page number
+      const addFooter = (pageNum: number) => {
+        pdf.setFontSize(8);
+        pdf.setTextColor(150, 150, 150);
+        pdf.text(`OWASP Shield Desk — Security Report — Page ${pageNum}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
+        pdf.text('CONFIDENTIAL', pageWidth - margin, pageHeight - 8, { align: 'right' });
+      };
+
+      // Helper: check if we need a new page
+      const checkPage = (requiredHeight: number) => {
+        if (y + requiredHeight > pageHeight - 20) {
+          addFooter(pdf.getNumberOfPages());
+          pdf.addPage();
+          y = margin;
+        }
+      };
+
+      // ---- Title Page ----
+      pdf.setFontSize(28);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Security Assessment', pageWidth / 2, 60, { align: 'center' });
+      pdf.text('Report', pageWidth / 2, 75, { align: 'center' });
+
+      pdf.setFontSize(12);
+      pdf.setTextColor(100, 100, 100);
+      pdf.text(`Generated: ${new Date().toLocaleString()}`, pageWidth / 2, 95, { align: 'center' });
+      pdf.text(`Targets: ${selectedScanData.length} | Findings: ${selectedFindings.length}`, pageWidth / 2, 105, { align: 'center' });
+      pdf.text('OWASP Shield Desk — Professional Edition', pageWidth / 2, 120, { align: 'center' });
+
+      addFooter(1);
+      pdf.addPage();
+      y = margin;
+
+      // ---- Executive Summary ----
+      pdf.setFontSize(18);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Executive Summary', margin, y);
+      y += 10;
+
+      pdf.setDrawColor(12, 74, 110);
+      pdf.setLineWidth(0.5);
+      pdf.line(margin, y, pageWidth - margin, y);
+      y += 8;
+
+      const highCount = selectedFindings.filter(f => f.severity === 'High').length;
+      const mediumCount = selectedFindings.filter(f => f.severity === 'Medium').length;
+      const lowCount = selectedFindings.filter(f => f.severity === 'Low').length;
+      const criticalCount = selectedFindings.filter(f => f.severity === 'Critical').length;
+
+      pdf.setFontSize(11);
+      pdf.setTextColor(50, 50, 50);
+      const summaryLines = pdf.splitTextToSize(
+        `This security assessment report summarizes vulnerability scanning results across ${selectedScanData.length} target(s). A total of ${selectedFindings.length} security findings were identified.`,
+        contentWidth
+      );
+      pdf.text(summaryLines, margin, y);
+      y += summaryLines.length * 6 + 8;
+
+      // Summary table
+      const colWidth = contentWidth / 5;
+      const labels = ['Total', 'Critical', 'High', 'Medium', 'Low'];
+      const counts = [selectedFindings.length, criticalCount, highCount, mediumCount, lowCount];
+      const bgColors: [number, number, number][] = [
+        [241, 245, 249], [254, 226, 226], [255, 237, 213], [254, 249, 195], [219, 234, 254]
+      ];
+
+      // Table header
+      for (let i = 0; i < labels.length; i++) {
+        const x = margin + i * colWidth;
+        pdf.setFillColor(...bgColors[i]);
+        pdf.rect(x, y, colWidth, 10, 'F');
+        pdf.setDrawColor(200, 200, 200);
+        pdf.rect(x, y, colWidth, 10, 'S');
+        pdf.setFontSize(9);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(labels[i], x + colWidth / 2, y + 7, { align: 'center' });
+      }
+      y += 10;
+
+      // Table values
+      for (let i = 0; i < counts.length; i++) {
+        const x = margin + i * colWidth;
+        pdf.setDrawColor(200, 200, 200);
+        pdf.rect(x, y, colWidth, 10, 'S');
+        pdf.setFontSize(14);
+        pdf.setTextColor(30, 30, 30);
+        pdf.text(String(counts[i]), x + colWidth / 2, y + 8, { align: 'center' });
+      }
+      y += 18;
+
+      // ---- Scanned Targets ----
+      checkPage(30);
+      pdf.setFontSize(16);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Scanned Targets', margin, y);
+      y += 8;
+      pdf.setDrawColor(12, 74, 110);
+      pdf.line(margin, y, pageWidth - margin, y);
+      y += 6;
+
+      for (const scan of selectedScanData) {
+        checkPage(18);
+        pdf.setFontSize(10);
+        pdf.setTextColor(2, 132, 199);
+        pdf.text(scan.target_url, margin + 2, y);
+        y += 5;
+        pdf.setTextColor(100, 100, 100);
+        pdf.setFontSize(9);
+        pdf.text(`Scanned: ${new Date(scan.created_at).toLocaleString()} | Status: ${scan.status}`, margin + 2, y);
+        y += 8;
       }
 
+      // ---- Detailed Findings ----
+      checkPage(20);
+      y += 5;
+      pdf.setFontSize(16);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Detailed Security Findings', margin, y);
+      y += 8;
+      pdf.setDrawColor(12, 74, 110);
+      pdf.line(margin, y, pageWidth - margin, y);
+      y += 8;
+
+      if (selectedFindings.length === 0) {
+        pdf.setFontSize(11);
+        pdf.setTextColor(100, 100, 100);
+        pdf.text('No vulnerabilities or findings reported for the selected scans.', margin, y);
+        y += 10;
+      }
+
+      // Group findings by tool
+      const groupedByTool = selectedFindings.reduce((acc: Record<string, Finding[]>, f) => {
+        const t = f.tool || 'Unknown';
+        if (!acc[t]) acc[t] = [];
+        acc[t].push(f);
+        return acc;
+      }, {});
+
+      for (const [toolName, toolFindings] of Object.entries(groupedByTool)) {
+        checkPage(20);
+        pdf.setFontSize(13);
+        pdf.setTextColor(30, 41, 59);
+        pdf.text(`${toolName.toUpperCase()} Findings`, margin, y);
+        y += 6;
+        pdf.setDrawColor(200, 200, 200);
+        pdf.line(margin, y, pageWidth - margin, y);
+        y += 6;
+
+        for (let idx = 0; idx < toolFindings.length; idx++) {
+          const finding = toolFindings[idx];
+          // Estimate block height: title + meta + description + recommendation
+          checkPage(55);
+
+          // Severity badge
+          const sevColor = severityColors[finding.severity] || [100, 100, 100];
+          pdf.setFillColor(...sevColor);
+          pdf.roundedRect(margin, y, 22, 6, 1, 1, 'F');
+          pdf.setFontSize(8);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(finding.severity, margin + 11, y + 4.5, { align: 'center' });
+
+          // OWASP category badge
+          pdf.setFillColor(241, 245, 249);
+          pdf.roundedRect(margin + 24, y, 55, 6, 1, 1, 'F');
+          pdf.setTextColor(71, 85, 105);
+          pdf.text(finding.owasp_category || '', margin + 51.5, y + 4.5, { align: 'center' });
+          y += 10;
+
+          // Title
+          pdf.setFontSize(11);
+          pdf.setTextColor(15, 23, 42);
+          const titleLines = pdf.splitTextToSize(`${idx + 1}. ${finding.title}`, contentWidth);
+          pdf.text(titleLines, margin, y);
+          y += titleLines.length * 5 + 3;
+
+          // Description
+          if (finding.description) {
+            checkPage(15);
+            pdf.setFontSize(9);
+            pdf.setTextColor(51, 65, 85);
+            const descLines = pdf.splitTextToSize(`Description: ${finding.description}`, contentWidth - 4);
+            pdf.text(descLines, margin + 2, y);
+            y += descLines.length * 4.5 + 3;
+          }
+
+          // Affected URL
+          if (finding.affected_url) {
+            checkPage(10);
+            pdf.setFontSize(9);
+            pdf.setTextColor(2, 132, 199);
+            const urlLines = pdf.splitTextToSize(`Affected URL: ${finding.affected_url}`, contentWidth - 4);
+            pdf.text(urlLines, margin + 2, y);
+            y += urlLines.length * 4.5 + 2;
+          }
+
+          // CVSS Score
+          if (finding.cvss_score) {
+            pdf.setFontSize(9);
+            pdf.setTextColor(153, 27, 27);
+            pdf.text(`CVSS v3 Score: ${finding.cvss_score}`, margin + 2, y);
+            y += 5;
+          }
+
+          // Recommendation
+          if (finding.recommendation) {
+            checkPage(15);
+            pdf.setFillColor(239, 246, 255);
+            const recLines = pdf.splitTextToSize(`Recommendation: ${finding.recommendation}`, contentWidth - 8);
+            const recHeight = recLines.length * 4.5 + 6;
+            pdf.roundedRect(margin, y, contentWidth, recHeight, 2, 2, 'F');
+            pdf.setFontSize(9);
+            pdf.setTextColor(30, 58, 138);
+            pdf.text(recLines, margin + 4, y + 5);
+            y += recHeight + 5;
+          }
+
+          // Separator between findings
+          y += 3;
+          pdf.setDrawColor(230, 230, 230);
+          pdf.line(margin + 10, y, pageWidth - margin - 10, y);
+          y += 6;
+        }
+      }
+
+      addFooter(pdf.getNumberOfPages());
       pdf.save(`security-report-${Date.now()}.pdf`);
-      document.body.removeChild(tempDiv);
 
     } else if (reportFormat === "html") {
       // HTML export

@@ -15,6 +15,11 @@ export interface ScanData {
   medium_risk_findings: number;
   low_risk_findings: number;
   error_message?: string;
+  scan_config?: {
+    current_step?: number;
+    total_steps?: number;
+    pinned_ip?: string;
+  };
 }
 
 export interface ScanLog {
@@ -65,12 +70,13 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
   const [loading, setLoading] = useState(false);
 
   const currentScanIdRef = useRef<string | null>(null);
+  const advanceIntervalRef = useRef<any>(null);
 
   useEffect(() => {
     currentScanIdRef.current = currentScan?.id || null;
   }, [currentScan?.id]);
 
-  // Set up real-time subscriptions
+  // Set up real-time subscriptions for live updates
   useEffect(() => {
     if (!session?.user) return;
 
@@ -145,452 +151,109 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
     };
   }, [session?.user]);
 
-  // Load existing logs and findings when currentScan changes, and poll if running/pending
+  // ========================================================================
+  // FIX #2: Step-based polling via Edge Function "advance" action
+  // ========================================================================
+  // When a scan is running, poll the edge function to advance one step at a
+  // time. Each call processes exactly one step server-side and returns.
+  // This replaces the old fire-and-forget pattern that was killed by the
+  // serverless runtime.
+  // ========================================================================
   useEffect(() => {
-    if (!session?.user || !currentScan?.id) return;
+    if (!session?.access_token || !currentScan?.id) return;
 
-    let intervalId: any;
-
-    const fetchExistingData = async () => {
-      try {
-        // Fetch current scan status from DB to ensure sync
-        const { data: latestScan, error: scanError } = await supabase
-          .from('scans')
-          .select('*')
-          .eq('id', currentScan.id)
-          .single();
-
-        if (scanError) throw scanError;
-        if (latestScan) {
-          setCurrentScan(latestScan as ScanData);
-        }
-
-        const { data: existingLogs, error: logsError } = await supabase
-          .from('scan_logs')
-          .select('*')
-          .eq('scan_id', currentScan.id)
-          .order('timestamp', { ascending: true });
-
-        if (logsError) throw logsError;
-        setScanLogs((existingLogs || []) as ScanLog[]);
-
-        const { data: existingFindings, error: findingsError } = await supabase
-          .from('findings')
-          .select('*')
-          .eq('scan_id', currentScan.id)
-          .order('created_at', { ascending: true });
-
-        if (findingsError) throw findingsError;
-        setFindings((existingFindings || []) as Finding[]);
-
-        // If the scan is no longer running, stop polling
-        if (latestScan && latestScan.status !== 'running' && latestScan.status !== 'pending') {
-          clearInterval(intervalId);
-        }
-      } catch (err) {
-        console.error("Error fetching/polling scan details:", err);
+    // Only poll if scan is running
+    if (currentScan.status !== 'running') {
+      if (advanceIntervalRef.current) {
+        clearInterval(advanceIntervalRef.current);
+        advanceIntervalRef.current = null;
       }
-    };
-
-    // Run immediately
-    fetchExistingData();
-
-    // If status is 'running' or 'pending', set up polling every 1.5 seconds as a robust fallback to Realtime
-    if (currentScan.status === 'running' || currentScan.status === 'pending') {
-      intervalId = setInterval(fetchExistingData, 1500);
+      return;
     }
 
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [session?.user, currentScan?.id, currentScan?.status]);
+    const advanceScan = async () => {
+      try {
+        const response = await supabase.functions.invoke('scan-orchestrator', {
+          body: {
+            action: 'advance',
+            scanId: currentScan.id,
+          },
+        });
 
-  const runClientSideSimulation = async (scan: ScanData) => {
-    const scanSteps = [
-      "Initializing security tools...",
-      "Discovering target endpoints...", 
-      "Testing for injection vulnerabilities...",
-      "Scanning for authentication bypasses...",
-      "Checking cryptographic implementations...",
-      "Analyzing access controls...",
-      "Detecting security misconfigurations...",
-      "Scanning for vulnerable components...",
-      "Performing comprehensive assessment...",
-      "Generating vulnerability report...",
-    ];
-
-    const addLog = async (msg: string, lvl: 'info' | 'warning' | 'error' = 'info') => {
-      await supabase.from('scan_logs').insert({
-        scan_id: scan.id,
-        message: msg,
-        level: lvl,
-      });
-    };
-
-    const addFinding = async (finding: any) => {
-      await supabase.from('findings').insert({
-        scan_id: scan.id,
-        ...finding,
-      });
-    };
-
-    try {
-      await addLog(`Starting security scan`, 'info');
-      await addLog(`Selected tools: ${scan.tools_used.join(", ")}`, 'info');
-
-      for (let i = 0; i < scanSteps.length; i++) {
-        // Sleep 2 seconds
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Double check if the scan has been cancelled
-        const { data: latestScan } = await supabase
-          .from('scans')
-          .select('status')
-          .eq('id', scan.id)
-          .single();
-          
-        if (latestScan?.status === 'cancelled') {
-          console.log("Scan cancelled by user, stopping simulation.");
+        if (response.error) {
+          console.error('Advance scan error:', response.error);
           return;
         }
 
-        await addLog(scanSteps[i], 'info');
+        const data = response.data;
 
-        // Add some realistic findings
-        if (i === 1 && scan.tools_used.includes("subfinder")) {
-          await addLog("Subfinder: Scanning for subdomains...", 'warning');
-          await addFinding({
-            tool: 'subfinder',
-            owasp_category: 'A05:2021-Security Misconfiguration',
-            severity: 'Low',
-            title: 'Exposed Staging Subdomain',
-            description: 'Subdomain staging.target exposed to the internet',
-            evidence: 'Subfinder discovered: staging.example.com resolving to public IP',
-            recommendation: 'Restrict access to staging subdomains behind VPN',
-            affected_url: `staging.${scan.target_url.replace(/https?:\/\//, '')}`,
-            parameters: [],
-            cwe_id: 'CWE-200',
-            cvss_score: 3.5
-          });
-        }
+        // Fetch updated data from DB for accurate state
+        await refreshScanData(currentScan.id);
 
-        if (i === 1 && scan.tools_used.includes("gobuster")) {
-          await addLog("Gobuster: Scanning directories...", 'warning');
-          await addFinding({
-            tool: 'gobuster',
-            owasp_category: 'A01:2021-Broken Access Control',
-            severity: 'Medium',
-            title: 'Exposed Backup Files',
-            description: 'Backup file found in public directory web root',
-            evidence: 'Gobuster found: /backup.zip (HTTP 200, Size: 15MB)',
-            recommendation: 'Remove backup files from web server root',
-            affected_url: `${scan.target_url}/backup.zip`,
-            parameters: [],
-            cwe_id: 'CWE-530',
-            cvss_score: 5.3
-          });
+        // If scan completed or failed, stop polling
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+          if (advanceIntervalRef.current) {
+            clearInterval(advanceIntervalRef.current);
+            advanceIntervalRef.current = null;
+          }
         }
+      } catch (err) {
+        console.error("Error advancing scan:", err);
+      }
+    };
 
-        if (i === 2 && scan.tools_used.includes("sqlmap")) {
-          await addLog("SQLMap: Testing for SQL injection...", 'warning');
-          await addFinding({
-            tool: 'sqlmap',
-            owasp_category: 'A03:2021-Injection',
-            severity: 'High',
-            title: 'SQL Injection Vulnerability',
-            description: 'Parameter "id" is vulnerable to SQL injection attacks',
-            evidence: 'sqlmap identified the following injection point(s) with a total of 5 HTTP(s) requests',
-            recommendation: 'Use parameterized queries or prepared statements',
-            affected_url: `${scan.target_url}/product?id=1`,
-            parameters: ['id'],
-            cwe_id: 'CWE-89',
-            cvss_score: 8.5
-          });
-        }
-        
-        if (i === 3 && scan.tools_used.includes("zap")) {
-          await addLog("ZAP: Found potential authentication bypass in /admin", 'error');
-          await addFinding({
-            tool: 'zap',
-            owasp_category: 'A01:2021-Broken Access Control',
-            severity: 'High',
-            title: 'Authentication Bypass',
-            description: 'Admin panel accessible without proper authentication',
-            evidence: 'HTTP 200 response received for /admin without valid session',
-            recommendation: 'Implement proper authentication checks for admin areas',
-            affected_url: `${scan.target_url}/admin`,
-            parameters: [],
-            cwe_id: 'CWE-285',
-            cvss_score: 9.1
-          });
-        }
+    // Start polling every 2 seconds
+    advanceScan(); // Advance immediately
+    advanceIntervalRef.current = setInterval(advanceScan, 2000);
 
-        if (i === 4 && scan.tools_used.includes("wapiti")) {
-          await addLog("Wapiti: Checking form parameters...", 'warning');
-          await addFinding({
-            tool: 'wapiti',
-            owasp_category: 'A03:2021-Injection',
-            severity: 'Medium',
-            title: 'Reflected File Inclusion',
-            description: 'Web application vulnerable to local file inclusion (LFI)',
-            evidence: 'Wapiti triggered warning fetching page=../../etc/passwd',
-            recommendation: 'Sanitize input parameters and use safe path resolution',
-            affected_url: `${scan.target_url}/index.php?page=about`,
-            parameters: ['page'],
-            cwe_id: 'CWE-98',
-            cvss_score: 6.8
-          });
-        }
+    return () => {
+      if (advanceIntervalRef.current) {
+        clearInterval(advanceIntervalRef.current);
+        advanceIntervalRef.current = null;
+      }
+    };
+  }, [session?.access_token, currentScan?.id, currentScan?.status]);
 
-        if (i === 4 && scan.tools_used.includes("nuclei")) {
-          await addLog("Nuclei: Running template-based security checks...", 'warning');
-          await addFinding({
-            tool: 'nuclei',
-            owasp_category: 'A05:2021-Security Misconfiguration',
-            severity: 'High',
-            title: 'Exposed git Repository',
-            description: 'Git source code control metadata folder is publicly accessible',
-            evidence: 'Nuclei template [exposed-git-directory] matched on URL /.git/config',
-            recommendation: 'Configure web server rules to deny access to .git folder',
-            affected_url: `${scan.target_url}/.git/config`,
-            parameters: [],
-            cwe_id: 'CWE-922',
-            cvss_score: 7.5
-          });
-        }
+  // Refresh scan data, logs, and findings from database
+  const refreshScanData = async (scanId: string) => {
+    try {
+      const { data: latestScan, error: scanError } = await supabase
+        .from('scans')
+        .select('*')
+        .eq('id', scanId)
+        .single();
 
-        if (i === 4 && scan.tools_used.includes("hydra")) {
-          await addLog("Hydra: Performing login security verification...", 'warning');
-          await addFinding({
-            tool: 'hydra',
-            owasp_category: 'A07:2021-Identification and Authentication Failures',
-            severity: 'High',
-            title: 'Weak SSH Credentials Found',
-            description: 'SSH server allows login using standard weak account credentials',
-            evidence: 'Hydra discovered valid login credentials admin / admin123',
-            recommendation: 'Enforce strong password policies and implement multi-factor auth',
-            affected_url: `${scan.target_url.replace(/https?:\/\//, '')}:22`,
-            parameters: [],
-            cwe_id: 'CWE-521',
-            cvss_score: 8.0
-          });
-        }
-
-        if (i === 5 && scan.tools_used.includes("retire")) {
-          await addLog("Retire.js: Analyzing client-side JavaScript libraries...", 'warning');
-          await addFinding({
-            tool: 'retire',
-            owasp_category: 'A06:2021-Vulnerable and Outdated Components',
-            severity: 'Medium',
-            title: 'Vulnerable JavaScript Library (jQuery)',
-            description: 'jQuery version 1.12.4 has known security vulnerabilities, including potential Cross-Site Scripting (XSS).',
-            evidence: 'Retire.js detected jQuery v1.12.4 at /assets/js/jquery.min.js (known vulnerabilities: CVE-2019-11358, CVE-2020-11022)',
-            recommendation: 'Upgrade jQuery to version 3.6.0 or higher.',
-            affected_url: `${scan.target_url}/assets/js/jquery.min.js`,
-            parameters: [],
-            cwe_id: 'CWE-79',
-            cvss_score: 6.1
-          });
-        }
-
-        if (i === 5 && scan.tools_used.includes("ffuf")) {
-          await addLog("ffuf: Fuzzing parameter injection endpoints...", 'warning');
-          await addFinding({
-            tool: 'ffuf',
-            owasp_category: 'A01:2021-Broken Access Control',
-            severity: 'Medium',
-            title: 'Insecure Direct Object Reference (IDOR)',
-            description: 'Web application allows unauthorized parameter access to other users accounts',
-            evidence: 'ffuf found valid responses for /user/account?id=FUZZ (IDs 1001-1050)',
-            recommendation: 'Enforce object-level access controls and verification checks',
-            affected_url: `${scan.target_url}/user/account?id=1001`,
-            parameters: ['id'],
-            cwe_id: 'CWE-639',
-            cvss_score: 6.5
-          });
-        }
-
-        if (i === 6 && scan.tools_used.includes("nikto")) {
-          await addLog("Nikto: Detected outdated server version", 'warning');
-          await addFinding({
-            tool: 'nikto',
-            owasp_category: 'A06:2021-Vulnerable and Outdated Components',
-            severity: 'Medium',
-            title: 'Outdated Server Software',
-            description: 'Server is running an outdated version with known vulnerabilities',
-            evidence: 'Server: Apache/2.4.41 (Ubuntu)',
-            recommendation: 'Update server software to the latest stable version',
-            affected_url: scan.target_url,
-            parameters: [],
-            cwe_id: 'CWE-1104',
-            cvss_score: 6.5
-          });
-        }
-
-        if (i === 6 && scan.tools_used.includes("xsstrike")) {
-          await addLog("XSStrike: Testing parameters for XSS...", 'warning');
-          await addFinding({
-            tool: 'xsstrike',
-            owasp_category: 'A03:2021-Injection',
-            severity: 'Medium',
-            title: 'Reflected Cross-Site Scripting (XSS)',
-            description: 'Parameter "search" does not sanitize input leading to reflected XSS',
-            evidence: 'XSStrike succeeded with payload: <svg/onload=alert(1)>',
-            recommendation: 'Implement context-aware HTML output encoding',
-            affected_url: `${scan.target_url}/search?q=test`,
-            parameters: ['q'],
-            cwe_id: 'CWE-79',
-            cvss_score: 6.1
-          });
-        }
-
-        if (i === 6 && scan.tools_used.includes("dalfox")) {
-          await addLog("Dalfox: Automated parameter verification...", 'warning');
-          await addFinding({
-            tool: 'dalfox',
-            owasp_category: 'A03:2021-Injection',
-            severity: 'Medium',
-            title: 'DOM-based Cross-Site Scripting (XSS)',
-            description: 'Client-side javascript executes unsanitized user input in DOM',
-            evidence: 'Dalfox validated payload: javascript:alert(document.domain) in hash param',
-            recommendation: 'Avoid dynamic execution of inputs and use safe APIs like textContent',
-            affected_url: `${scan.target_url}/#debug=true`,
-            parameters: ['#debug'],
-            cwe_id: 'CWE-79',
-            cvss_score: 5.8
-          });
-        }
-
-        if (i === 7 && scan.tools_used.includes("testssl")) {
-          await addLog("testssl.sh: Auditing SSL/TLS settings...", 'warning');
-          await addFinding({
-            tool: 'testssl',
-            owasp_category: 'A02:2021-Cryptographic Failures',
-            severity: 'Medium',
-            title: 'Weak TLS Cipher Suites Enabled',
-            description: 'Server supports TLS 1.0/1.1 and deprecated cipher suites',
-            evidence: 'testssl.sh output: TLS 1.0 (enabled), ECDHE-RSA-AES256-SHA (weak)',
-            recommendation: 'Disable TLS 1.0/1.1 and force modern cipher configurations (TLS 1.2+)',
-            affected_url: scan.target_url,
-            parameters: [],
-            cwe_id: 'CWE-326',
-            cvss_score: 4.8
-          });
-        }
-
-        if (i === 7 && scan.tools_used.includes("securityheaders")) {
-          await addLog("SecurityHeaders.com: Checking security headers...", 'warning');
-          await addFinding({
-            tool: 'securityheaders',
-            owasp_category: 'A05:2021-Security Misconfiguration',
-            severity: 'Low',
-            title: 'Missing Content Security Policy (CSP) Header',
-            description: 'Server response is missing the Content-Security-Policy header',
-            evidence: 'SecurityHeaders rating: C (missing CSP, HSTS, X-Frame-Options)',
-            recommendation: 'Configure Content-Security-Policy rules in web server configs',
-            affected_url: scan.target_url,
-            parameters: [],
-            cwe_id: 'CWE-693',
-            cvss_score: 3.8
-          });
-        }
-
-        if (i === 8 && scan.tools_used.includes("wpscan")) {
-          await addLog("WPScan: Scanning WordPress metadata...", 'warning');
-          await addFinding({
-            tool: 'wpscan',
-            owasp_category: 'A06:2021-Vulnerable and Outdated Components',
-            severity: 'Medium',
-            title: 'Outdated WordPress Plugin (WooCommerce)',
-            description: 'Active WooCommerce plugin is vulnerable to unauthorized privilege escalation',
-            evidence: 'WPScan matched v5.5.1 against DB: CVE-2021-34646 (Privilege Escalation)',
-            recommendation: 'Update WooCommerce plugin to version 5.5.2 or higher',
-            affected_url: `${scan.target_url}/wp-content/plugins/woocommerce/`,
-            parameters: [],
-            cwe_id: 'CWE-269',
-            cvss_score: 6.4
-          });
-        }
-
-        if (i === 8 && scan.tools_used.includes("nmap")) {
-          await addLog("Nmap: Scanning port ranges...", 'warning');
-          await addFinding({
-            tool: 'nmap',
-            owasp_category: 'A05:2021-Security Misconfiguration',
-            severity: 'Low',
-            title: 'Exposed Management Port (MySQL)',
-            description: 'Database server port is accessible from the public internet',
-            evidence: 'Nmap found port 3306/tcp open (service: mysql)',
-            recommendation: 'Bind database listener to localhost or restrict access via firewall rules',
-            affected_url: `${scan.target_url.replace(/https?:\/\//, '')}:3306`,
-            parameters: [],
-            cwe_id: 'CWE-668',
-            cvss_score: 3.8
-          });
-        }
-
-        if (i === 9 && scan.tools_used.includes("metasploit")) {
-          await addLog("Metasploit: Verifying exploitable vulnerability vectors...", 'warning');
-          await addFinding({
-            tool: 'metasploit',
-            owasp_category: 'A05:2021-Security Misconfiguration',
-            severity: 'Medium',
-            title: 'Exploitable FTP service (vsftpd 2.3.4)',
-            description: 'FTP daemon has an active exploit vector that allows backdoor access',
-            evidence: 'Metasploit check module exploit/unix/ftp/vsftpd_234_backdoor returns positive',
-            recommendation: 'Replace vsftpd with a secure alternative or upgrade to version 2.3.5+',
-            affected_url: `${scan.target_url.replace(/https?:\/\//, '')}:21`,
-            parameters: [],
-            cwe_id: 'CWE-287',
-            cvss_score: 6.8
-          });
-        }
-
-        // Update progress
-        const progress = Math.round(((i + 1) / scanSteps.length) * 100);
-        await supabase
-          .from('scans')
-          .update({ 
-            status: progress === 100 ? 'completed' : 'running',
-            completed_at: progress === 100 ? new Date().toISOString() : null
-          })
-          .eq('id', scan.id);
+      if (scanError) throw scanError;
+      if (latestScan) {
+        setCurrentScan(latestScan as ScanData);
       }
 
-      // Fetch findings to update statistics
-      const { data: findingsList } = await supabase
+      const { data: existingLogs, error: logsError } = await supabase
+        .from('scan_logs')
+        .select('*')
+        .eq('scan_id', scanId)
+        .order('timestamp', { ascending: true });
+
+      if (logsError) throw logsError;
+      setScanLogs((existingLogs || []) as ScanLog[]);
+
+      const { data: existingFindings, error: findingsError } = await supabase
         .from('findings')
-        .select('severity')
-        .eq('scan_id', scan.id);
+        .select('*')
+        .eq('scan_id', scanId)
+        .order('created_at', { ascending: true });
 
-      const stats = (findingsList || []).reduce((acc: any, f: any) => {
-        acc.total_findings++;
-        if (f.severity === 'High') acc.high_risk_findings++;
-        else if (f.severity === 'Medium') acc.medium_risk_findings++;
-        else if (f.severity === 'Low') acc.low_risk_findings++;
-        return acc;
-      }, { total_findings: 0, high_risk_findings: 0, medium_risk_findings: 0, low_risk_findings: 0 });
-
-      await supabase
-        .from('scans')
-        .update(stats)
-        .eq('id', scan.id);
-
-      await addLog("Security scan completed successfully!", 'info');
-    } catch (simError) {
-      console.error("Simulation error:", simError);
-      await supabase
-        .from('scans')
-        .update({
-          status: 'failed',
-          error_message: (simError as any).message || "Simulation error",
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', scan.id);
-      await addLog(`Scan failed: ${(simError as any).message}`, 'error');
+      if (findingsError) throw findingsError;
+      setFindings((existingFindings || []) as Finding[]);
+    } catch (err) {
+      console.error("Error refreshing scan data:", err);
     }
   };
 
+  // ========================================================================
+  // FIX #5: All database writes go through the Edge Function only.
+  // No client-side fallback database inserts.
+  // ========================================================================
   const startScan = async (targetUrl: string, tools: string[], scanConfig: any = {}) => {
     if (!session?.access_token) {
       toast({
@@ -606,85 +269,46 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
     setFindings([]);
 
     try {
-      let scanId: string;
-      let scanData: ScanData;
+      // All scan creation goes through the Edge Function (service_role)
+      const response = await supabase.functions.invoke('scan-orchestrator', {
+        body: {
+          action: 'start',
+          targetUrl,
+          tools,
+          scanConfig,
+        },
+      });
 
-      try {
-        const response = await supabase.functions.invoke('scan-orchestrator', {
-          body: {
-            action: 'start',
-            targetUrl,
-            tools,
-            scanConfig,
-          },
-        });
-
-        if (response.error) {
-          throw response.error;
-        }
-
-        scanId = response.data.scanId;
-        
-        // Fetch initial scan data
-        const { data, error: scanError } = await supabase
-          .from('scans')
-          .select('*')
-          .eq('id', scanId)
-          .single();
-
-        if (scanError) throw scanError;
-        scanData = data as ScanData;
-
-        toast({
-          title: "Scan Started",
-          description: `Security scan initiated for ${targetUrl}`,
-        });
-      } catch (invokeError) {
-        console.warn("Edge function invocation failed, falling back to client-side simulated scan:", invokeError);
-        
-        // SECURITY FIX: Disable client-side database fallback writes in production
-        if (!import.meta.env.DEV) {
-          throw new Error("Local simulated fallback is disabled in production. Please check Edge Function status.");
-        }
-        
-        // Directly insert the scan into the DB
-        const { data, error: insertError } = await supabase
-          .from('scans')
-          .insert({
-            user_id: session.user.id,
-            target_url: targetUrl,
-            status: 'running',
-            tools_used: tools,
-            scan_config: scanConfig,
-            started_at: new Date().toISOString(),
-          })
-          .select()
-          .single();
-
-        if (insertError) throw insertError;
-        scanData = data as ScanData;
-        scanId = scanData.id;
-
-        setCurrentScan(scanData);
-        currentScanIdRef.current = scanId;
-
-        // Run client-side simulation
-        runClientSideSimulation(scanData);
-        
-        toast({
-          title: "Local Scan Started (Fallback)",
-          description: `Initiated simulated scan for ${targetUrl} (Edge Function offline)`,
-        });
+      if (response.error) {
+        throw new Error(response.error.message || 'Edge Function error');
       }
+
+      const scanId = response.data.scanId;
+
+      // Fetch initial scan data from DB (read-only, allowed by RLS)
+      const { data, error: scanError } = await supabase
+        .from('scans')
+        .select('*')
+        .eq('id', scanId)
+        .single();
+
+      if (scanError) throw scanError;
+      const scanData = data as ScanData;
 
       setCurrentScan(scanData);
       currentScanIdRef.current = scanId;
+
+      toast({
+        title: "Scan Started",
+        description: `Security scan initiated for ${targetUrl}`,
+      });
+
       return scanId;
     } catch (error: any) {
       console.error('Start scan error:', error);
       toast({
         title: "Scan Failed",
-        description: error.message || "Failed to start security scan",
+        description: error.message || "Failed to start security scan. Please ensure the Edge Function is deployed.",
         variant: "destructive",
       });
       return null;
@@ -693,52 +317,37 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
     }
   };
 
+  // ========================================================================
+  // Stop scan — goes through Edge Function only
+  // ========================================================================
   const stopScan = async (scanId: string) => {
     if (!session?.access_token) return;
 
     try {
-      let stopped = false;
-      try {
-        const response = await supabase.functions.invoke('scan-orchestrator', {
-          body: {
-            action: 'stop',
-            scanId,
-          },
-        });
+      const response = await supabase.functions.invoke('scan-orchestrator', {
+        body: {
+          action: 'stop',
+          scanId,
+        },
+      });
 
-        if (response.error) {
-          throw response.error;
-        }
-        stopped = true;
-      } catch (invokeError) {
-        console.warn("Edge function stopScan failed, running client-side stop:", invokeError);
-        
-        // Try directly updating database status
-        const { error } = await supabase
-          .from('scans')
-          .update({ 
-            status: 'cancelled',
-            completed_at: new Date().toISOString()
-          })
-          .eq('id', scanId)
-          .eq('user_id', session.user.id);
-
-        if (error) throw error;
-        
-        await supabase.from('scan_logs').insert({
-          scan_id: scanId,
-          message: "Scan stopped by user",
-          level: 'info',
-        });
-        stopped = true;
+      if (response.error) {
+        throw new Error(response.error.message || 'Failed to stop scan');
       }
 
-      if (stopped) {
-        toast({
-          title: "Scan Stopped",
-          description: "Security scan has been terminated.",
-        });
+      // Stop the advance polling
+      if (advanceIntervalRef.current) {
+        clearInterval(advanceIntervalRef.current);
+        advanceIntervalRef.current = null;
       }
+
+      // Refresh from DB
+      await refreshScanData(scanId);
+
+      toast({
+        title: "Scan Stopped",
+        description: "Security scan has been terminated.",
+      });
     } catch (error: any) {
       console.error('Stop scan error:', error);
       toast({
@@ -807,53 +416,19 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
     }
   };
 
-  const generateReport = async (scanId: string, format: 'html' | 'json' | 'csv' = 'html') => {
+  const generateReport = async (scanId: string, format: 'html' | 'json' | 'csv' | 'doc' = 'html') => {
     if (!session?.access_token) return null;
 
     try {
-      let reportData = null;
-      try {
-        const response = await supabase.functions.invoke('report-generator', {
-          body: {
-            scanId,
-            format,
-          },
-        });
+      const response = await supabase.functions.invoke('report-generator', {
+        body: {
+          scanId,
+          format,
+        },
+      });
 
-        if (response.error) {
-          throw response.error;
-        }
-        reportData = response.data;
-      } catch (invokeError) {
-        console.warn("Edge function generateReport failed, running client-side simulation fallback:", invokeError);
-        
-        // SECURITY FIX: Disable client-side database fallback writes in production
-        if (!import.meta.env.DEV) {
-          throw new Error("Local report generation fallback is disabled in production. Please check Edge Function status.");
-        }
-        
-        // Simulating the report generation in the database
-        const details = await getScanDetails(scanId);
-        if (!details) throw new Error("Could not fetch scan details to generate report locally.");
-        
-        // Create scan report record
-        const { data: reportRecord, error: reportError } = await supabase
-          .from('scan_reports')
-          .insert({
-            scan_id: scanId,
-            user_id: session.user.id,
-            format,
-            file_size: 1024, // Mock size
-          })
-          .select()
-          .single();
-
-        if (reportError) throw reportError;
-        
-        reportData = {
-          reportId: reportRecord.id,
-          message: "Local report generated",
-        };
+      if (response.error) {
+        throw new Error(response.error.message || 'Report generation failed');
       }
 
       toast({
@@ -861,12 +436,12 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
         description: `${format.toUpperCase()} report has been generated successfully.`,
       });
 
-      return reportData;
+      return response.data;
     } catch (error: any) {
       console.error('Generate report error:', error);
       toast({
         title: "Report Generation Failed",
-        description: error.message || "Failed to generate report",
+        description: error.message || "Failed to generate report. Please ensure the Edge Function is deployed.",
         variant: "destructive",
       });
       return null;
