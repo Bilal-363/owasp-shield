@@ -7,18 +7,18 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
+import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { 
-  Play, 
-  Square, 
-  Scan, 
-  AlertTriangle, 
-  CheckCircle, 
+import {
+  Play,
+  Square,
+  Scan,
+  AlertTriangle,
+  CheckCircle,
   Clock,
   Globe,
   Database,
@@ -41,7 +41,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useScanOrchestrator } from "@/hooks/useScanOrchestrator";
-import { getCSRFToken, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { validateScanForm } from "../lib/validation";
 
 // URL Validation - SSRF Protection
@@ -49,7 +49,7 @@ const isValidPublicUrl = (urlString: string): boolean => {
   try {
     const url = new URL(urlString);
     const hostname = url.hostname.toLowerCase();
-    
+
     // Block private/internal IPs and protocols
     const blockedPatterns = [
       /^localhost$/i,
@@ -61,132 +61,117 @@ const isValidPublicUrl = (urlString: string): boolean => {
       /^fc00:/i,
       /^fe80:/i,
     ];
-    
+
     // Block file protocol
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       return false;
     }
-    
+
     // Check against blocked patterns
     if (blockedPatterns.some(pattern => pattern.test(hostname))) {
       return false;
     }
-    
+
     return true;
   } catch {
     return false;
   }
 };
 
+// Only tools the real backend actually runs. Built-in checks (retire,
+// securityheaders, subfinder) always work; the rest run when installed
+// (Docker image) and are skipped gracefully otherwise.
 const tools = [
-  { id: "zap", name: "OWASP ZAP", description: "Web Application Security Scanner", icon: Zap, enabled: true, category: "Web" },
-  { id: "sqlmap", name: "SQLMap", description: "SQL Injection Testing", icon: Database, enabled: true, category: "Web" },
+  { id: "nmap", name: "Nmap", description: "Port Scanner & Service Detector", icon: Server, enabled: true, category: "Recon" },
+  { id: "subfinder", name: "Subfinder", description: "Subdomain Discovery", icon: Link, enabled: true, category: "Recon" },
+  { id: "gobuster", name: "Gobuster", description: "Directory & File Discovery", icon: FolderSearch, enabled: true, category: "Recon" },
+  { id: "ffuf", name: "ffuf", description: "Endpoint Fuzzer", icon: Terminal, enabled: true, category: "Recon" },
+  { id: "whatweb", name: "WhatWeb", description: "Technology Fingerprinting", icon: Fingerprint, enabled: true, category: "Recon" },
+  { id: "nuclei", name: "Nuclei", description: "Template-based CVE Scanner", icon: Cpu, enabled: true, category: "Vulnerability" },
   { id: "nikto", name: "Nikto", description: "Web Server Scanner", icon: Globe, enabled: true, category: "Web" },
-  { id: "retire", name: "Retire.js", description: "JavaScript Vulnerabilities", icon: Search, enabled: false, category: "Web" },
-  { id: "subfinder", name: "Subfinder", description: "Subdomain Discovery Tool", icon: Link, enabled: false, category: "Recon" },
-  { id: "gobuster", name: "Gobuster", description: "Directory & File Fuzzing Tool", icon: FolderSearch, enabled: false, category: "Recon" },
-  { id: "wapiti", name: "Wapiti", description: "Web App Vulnerability Scanner", icon: FileCode, enabled: false, category: "Web" },
-  { id: "nuclei", name: "Nuclei", description: "Template-based CVE Scanner", icon: Cpu, enabled: false, category: "Vulnerability" },
-  { id: "hydra", name: "Hydra", description: "Login Brute-Force Testing Tool", icon: KeyRound, enabled: false, category: "Authentication" },
-  { id: "ffuf", name: "ffuf", description: "Web Parameter & Header Fuzzer", icon: Terminal, enabled: false, category: "Recon" },
-  { id: "xsstrike", name: "XSStrike", description: "Advanced XSS Detection Suite", icon: Bug, enabled: false, category: "XSS" },
-  { id: "dalfox", name: "Dalfox", description: "Fast XSS Parameter Scanner", icon: Sparkles, enabled: false, category: "XSS" },
-  { id: "testssl", name: "testssl.sh", description: "SSL/TLS Configuration Auditor", icon: ShieldAlert, enabled: false, category: "SSL" },
-  { id: "securityheaders", name: "SecurityHeaders.com", description: "HTTP Security Header Checker", icon: Shield, enabled: false, category: "SSL" },
-  { id: "wpscan", name: "WPScan", description: "WordPress Security Scanner", icon: Fingerprint, enabled: false, category: "CMS" },
-  { id: "nmap", name: "Nmap", description: "Port Scanner & Service Detector", icon: Server, enabled: false, category: "Recon" },
-  { id: "metasploit", name: "Metasploit", description: "Exploit Verification Framework", icon: Skull, enabled: false, category: "Exploits" },
-];
-
-const scanSteps = [
-  "Initializing security tools...",
-  "Discovering target endpoints...", 
-  "Testing for injection vulnerabilities...",
-  "Scanning for authentication bypasses...",
-  "Checking cryptographic implementations...",
-  "Analyzing access controls...",
-  "Detecting security misconfigurations...",
-  "Scanning for vulnerable components...",
-  "Performing comprehensive assessment...",
-  "Generating vulnerability report...",
+  { id: "retire", name: "Retire.js", description: "Outdated JS Libraries", icon: Search, enabled: true, category: "Web" },
+  { id: "sqlmap", name: "SQLMap", description: "SQL Injection Testing", icon: Database, enabled: true, category: "Injection" },
+  { id: "dalfox", name: "Dalfox", description: "XSS Testing", icon: Sparkles, enabled: true, category: "Injection" },
+  { id: "testssl", name: "sslscan", description: "SSL/TLS Configuration Audit", icon: ShieldAlert, enabled: true, category: "SSL" },
+  { id: "securityheaders", name: "Security Headers", description: "HTTP Security Header Check", icon: Shield, enabled: true, category: "SSL" },
+  { id: "wpscan", name: "WPScan", description: "WordPress Security Scanner", icon: Cpu, enabled: true, category: "CMS" },
 ];
 
 export default function Scanner() {
-  const [targetUrl, setTargetUrl] = useState("");
-  const [selectedTools, setSelectedTools] = useState(tools.filter(t => t.enabled).map(t => t.id));
+  const [targetUrl, setTargetUrl] = useState(() => {
+    return localStorage.getItem("owasp_shield_scanner_target_url") || "";
+  });
+  const [selectedTools, setSelectedTools] = useState<string[]>(() => {
+    const savedSelected = localStorage.getItem("owasp_shield_scanner_selected_tools");
+    if (savedSelected) {
+      try {
+        return JSON.parse(savedSelected);
+      } catch (e) {
+        console.error("Error parsing saved scanner tools:", e);
+      }
+    }
+    const savedSettingsTools = localStorage.getItem("owasp_shield_settings_tools");
+    if (savedSettingsTools) {
+      try {
+        const parsed = JSON.parse(savedSettingsTools);
+        return parsed.filter((t: any) => t.settings?.enabled).map((t: any) => t.id);
+      } catch (e) {
+        console.error("Error parsing saved settings tools:", e);
+      }
+    }
+    return tools.filter(t => t.enabled).map(t => t.id);
+  });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [scanProfile, setScanProfile] = useState<'quick' | 'deep'>(() => {
+    return (localStorage.getItem("owasp_shield_scan_profile") as 'quick' | 'deep') || 'quick';
+  });
   const { toast } = useToast();
-  const { 
-    currentScan, 
-    scanLogs, 
-    findings, 
-    loading, 
-    startScan, 
-    stopScan 
+  const {
+    currentScan,
+    scanLogs,
+    findings,
+    loading,
+    startScan,
+    stopScan
   } = useScanOrchestrator();
 
-  // Load enabled tools from settings on mount
+  // Save targetUrl when changed
   useEffect(() => {
-    const savedTools = localStorage.getItem("owasp_shield_settings_tools");
-    if (savedTools) {
-      try {
-        const parsed = JSON.parse(savedTools);
-        const enabledIds = parsed
-          .filter((t: any) => t.settings?.enabled)
-          .map((t: any) => t.id);
-        setSelectedTools(enabledIds);
-      } catch (e) {
-        console.error("Error loading enabled tools from settings:", e);
-      }
+    if (targetUrl) {
+      localStorage.setItem("owasp_shield_scanner_target_url", targetUrl);
     }
-  }, []);
+  }, [targetUrl]);
 
-  const getScanProgress = (status: string, logs: any[]) => {
-    if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-      return 100;
+  // Persist chosen scan profile
+  useEffect(() => {
+    localStorage.setItem("owasp_shield_scan_profile", scanProfile);
+  }, [scanProfile]);
+
+  // Save selectedTools when changed
+  useEffect(() => {
+    localStorage.setItem("owasp_shield_scanner_selected_tools", JSON.stringify(selectedTools));
+  }, [selectedTools]);
+
+  useEffect(() => {
+    if (currentScan?.target_url && !targetUrl) {
+      setTargetUrl(currentScan.target_url);
     }
-    if (status === 'pending') {
-      return 0;
-    }
-    
-    // Find the latest step from scanSteps that is present in the logs
-    let latestStepIndex = -1;
-    logs.forEach(log => {
-      const stepIdx = scanSteps.findIndex(step => log.message.includes(step));
-      if (stepIdx > latestStepIndex) {
-        latestStepIndex = stepIdx;
-      }
-    });
+  }, [currentScan?.target_url, targetUrl]);
 
-    if (latestStepIndex === -1) {
-      return 5;
-    }
-
-    const baseProgress = Math.round(((latestStepIndex + 1) / scanSteps.length) * 95);
-    return Math.min(95, Math.max(10, baseProgress));
-  };
-
-  const getStepStatus = (stepName: string, index: number) => {
-    if (!currentScan) return 'pending';
-    if (currentScan.status === 'completed') return 'completed';
-    if (currentScan.status === 'failed' || currentScan.status === 'cancelled') {
-      const stepLogged = scanLogs.some(log => log.message.includes(stepName));
-      return stepLogged ? 'completed' : 'cancelled';
-    }
-
-    const stepLogged = scanLogs.some(log => log.message.includes(stepName));
-    if (!stepLogged) return 'pending';
-
-    const nextStep = scanSteps[index + 1];
-    if (!nextStep) {
-      return 'running';
-    }
-    const nextStepLogged = scanLogs.some(log => log.message.includes(nextStep));
-    return nextStepLogged ? 'completed' : 'running';
+  // Real progress driven by the backend (scan_config.current_step / total_steps).
+  const getScanProgress = (scan: any) => {
+    if (!scan) return 0;
+    const { status } = scan;
+    if (status === 'completed' || status === 'failed' || status === 'cancelled') return 100;
+    if (status === 'pending') return 0;
+    const cur = scan.scan_config?.current_step ?? 0;
+    const total = scan.scan_config?.total_steps ?? 0;
+    if (!total) return 5; // running, first step not reported yet
+    return Math.min(99, Math.max(5, Math.round((cur / total) * 100)));
   };
 
   const isScanning = currentScan?.status === 'running';
-  const scanProgress = currentScan ? getScanProgress(currentScan.status, scanLogs) : 0;
+  const scanProgress = getScanProgress(currentScan);
 
   const handleStartScan = async () => {
     // SECURITY FIX: Client-side form validation
@@ -215,7 +200,7 @@ export default function Scanner() {
       return;
     }
 
-    await startScan(targetUrl, selectedTools);
+    await startScan(targetUrl, selectedTools, scanProfile);
   };
 
   const handleStopScan = async () => {
@@ -225,7 +210,7 @@ export default function Scanner() {
   };
 
   const formatLogs = () => {
-    return scanLogs.map(log => 
+    return scanLogs.map(log =>
       `[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}`
     ).join('\n');
   };
@@ -272,7 +257,42 @@ export default function Scanner() {
                   </div>
                 )}
               </div>
-              
+
+              {/* Scan depth: Quick vs Deep */}
+              <div className="space-y-2">
+                <Label>Scan Depth</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isScanning}
+                    onClick={() => setScanProfile('quick')}
+                    className={cn(
+                      "rounded-lg border p-3 text-left transition-all disabled:opacity-50",
+                      scanProfile === 'quick'
+                        ? "border-primary bg-primary/10 ring-1 ring-primary"
+                        : "border-border hover:bg-accent/50"
+                    )}
+                  >
+                    <div className="font-semibold text-sm">⚡ Quick</div>
+                    <div className="text-xs text-muted-foreground">Fewer ports, high/medium checks. Faster.</div>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isScanning}
+                    onClick={() => setScanProfile('deep')}
+                    className={cn(
+                      "rounded-lg border p-3 text-left transition-all disabled:opacity-50",
+                      scanProfile === 'deep'
+                        ? "border-primary bg-primary/10 ring-1 ring-primary"
+                        : "border-border hover:bg-accent/50"
+                    )}
+                  >
+                    <div className="font-semibold text-sm">🔬 Deep</div>
+                    <div className="text-xs text-muted-foreground">More ports, all templates. Slower, thorough.</div>
+                  </button>
+                </div>
+              </div>
+
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Security Tools</Label>
@@ -289,7 +309,7 @@ export default function Scanner() {
                     <Button
                       variant="outline"
                       size="xs"
-                      onClick={() => setSelectedTools(["zap", "sqlmap", "nikto", "wapiti", "nuclei", "xsstrike", "dalfox", "securityheaders", "retire"])}
+                      onClick={() => setSelectedTools(["nikto", "nuclei", "sqlmap", "dalfox", "gobuster", "ffuf", "whatweb", "securityheaders", "retire", "wpscan"])}
                       disabled={isScanning}
                       className="text-xs h-7 px-2"
                     >
@@ -324,7 +344,7 @@ export default function Scanner() {
                 )}
 
                 <Accordion type="multiple" defaultValue={["Web", "Recon"]} className="border border-border/50 rounded-lg p-2 bg-card/50">
-                  {["Recon", "Web", "Vulnerability", "XSS", "SSL", "CMS", "Authentication", "Exploits"].map((category) => {
+                  {["Recon", "Web", "Vulnerability", "Injection", "SSL", "CMS"].map((category) => {
                     const categoryTools = tools.filter(t => t.category === category);
                     if (categoryTools.length === 0) return null;
                     const allChecked = categoryTools.every(t => selectedTools.includes(t.id));
@@ -422,7 +442,7 @@ export default function Scanner() {
                   </div>
                   <Progress value={scanProgress} className="w-full" />
                 </div>
-                
+
                 {currentScan && (
                   <div className="space-y-2">
                     <Label>Current Status</Label>
@@ -432,67 +452,32 @@ export default function Scanner() {
                   </div>
                 )}
 
+                {currentScan?.scan_config?.total_steps ? (
+                  <div className="space-y-2">
+                    <Label>Step</Label>
+                    <p className="text-sm text-muted-foreground">
+                      {currentScan.scan_config.current_step ?? 0} / {currentScan.scan_config.total_steps} stages
+                      {isScanning ? " running…" : " done"}
+                    </p>
+                  </div>
+                ) : null}
+
                 {findings.length > 0 && (
                   <div className="space-y-2">
-                    <Label>Findings Detected</Label>
-                    <div className="flex gap-2">
+                    <Label>Findings Detected ({findings.length})</Label>
+                    <div className="flex flex-wrap gap-2">
                       <Badge variant="critical" className="text-xs">
-                        {findings.filter(f => f.severity === 'High').length} High
+                        {findings.filter(f => f.severity === 'Critical').length} Critical
                       </Badge>
                       <Badge variant="high" className="text-xs">
-                        {findings.filter(f => f.severity === 'Medium').length} Medium
+                        {findings.filter(f => f.severity === 'High').length} High
                       </Badge>
                       <Badge variant="medium" className="text-xs">
+                        {findings.filter(f => f.severity === 'Medium').length} Medium
+                      </Badge>
+                      <Badge variant="low" className="text-xs">
                         {findings.filter(f => f.severity === 'Low').length} Low
                       </Badge>
-                    </div>
-                  </div>
-                )}
-
-                {currentScan && (
-                  <div className="pt-4 border-t space-y-3">
-                    <Label className="text-sm font-semibold">Scan Steps</Label>
-                    <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1">
-                      {scanSteps.map((stepName, index) => {
-                        const status = getStepStatus(stepName, index);
-                        return (
-                          <div key={index} className="flex items-center justify-between text-xs transition-all duration-200">
-                            <div className="flex items-center gap-2">
-                              {status === 'completed' && (
-                                <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
-                              )}
-                              {status === 'running' && (
-                                <Clock className="h-4 w-4 text-primary animate-spin shrink-0" />
-                              )}
-                              {status === 'pending' && (
-                                <div className="h-4 w-4 rounded-full border border-muted-foreground/30 bg-muted/10 shrink-0" />
-                              )}
-                              {status === 'cancelled' && (
-                                <AlertTriangle className="h-4 w-4 text-yellow-500 shrink-0" />
-                              )}
-                              <span className={cn(
-                                status === 'running' && "font-semibold text-foreground",
-                                status === 'completed' && "text-muted-foreground line-through decoration-muted-foreground/40",
-                                status === 'pending' && "text-muted-foreground/60",
-                                status === 'cancelled' && "text-yellow-600/70"
-                              )}>
-                                {stepName}
-                              </span>
-                            </div>
-                            {status === 'running' && (
-                              <Badge variant="outline" className="text-[9px] py-0 px-1.5 animate-pulse bg-primary/5 text-primary border-primary/20">
-                                Scanning
-                              </Badge>
-                            )}
-                            {status === 'completed' && (
-                              <span className="text-[10px] text-green-600 font-medium">Done</span>
-                            )}
-                            {status === 'cancelled' && (
-                              <span className="text-[10px] text-yellow-600 font-medium">Skipped</span>
-                            )}
-                          </div>
-                        );
-                      })}
                     </div>
                   </div>
                 )}

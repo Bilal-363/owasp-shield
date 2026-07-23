@@ -17,6 +17,7 @@ import Scanner from "./pages/Scanner";
 import Results from "./pages/Results";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
+import Guide from "./pages/Guide";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -48,6 +49,7 @@ const App = () => {
                             <Route path="/scanner" element={<Scanner />} />
                             <Route path="/results" element={<Results />} />
                             <Route path="/reports" element={<Reports />} />
+                            <Route path="/guide" element={<Guide />} />
                             <Route path="/settings" element={<Settings />} />
                             <Route path="*" element={<NotFound />} />
                           </Routes>

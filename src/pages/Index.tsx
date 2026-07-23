@@ -68,23 +68,19 @@ const owaspTop10 = [
 ];
 
 const tools = [
-  { name: "OWASP ZAP", description: "Web Application Security Scanner", icon: Zap, category: "Web" },
-  { name: "SQLMap", description: "SQL Injection Testing Tool", icon: Database, category: "Web" },
-  { name: "Nikto", description: "Web Server Scanner", icon: Globe, category: "Web" },
-  { name: "Retire.js", description: "JavaScript Vulnerability Scanner", icon: Search, category: "Web" },
-  { name: "Subfinder", description: "Subdomain Discovery Tool", icon: Link, category: "Recon" },
-  { name: "Gobuster", description: "Directory & File Fuzzing Tool", icon: FolderSearch, category: "Recon" },
-  { name: "Wapiti", description: "Web App Vulnerability Scanner", icon: FileCode, category: "Web" },
-  { name: "Nuclei", description: "Template-based CVE Scanner", icon: Cpu, category: "Vulnerability" },
-  { name: "Hydra", description: "Login Brute-Force Testing Tool", icon: KeyRound, category: "Authentication" },
-  { name: "ffuf", description: "Web Parameter & Header Fuzzer", icon: Terminal, category: "Recon" },
-  { name: "XSStrike", description: "Advanced XSS Detection Suite", icon: Bug, category: "XSS" },
-  { name: "Dalfox", description: "Fast XSS Parameter Scanner", icon: Sparkles, category: "XSS" },
-  { name: "testssl.sh", description: "SSL/TLS Configuration Auditor", icon: ShieldAlert, category: "SSL" },
-  { name: "SecurityHeaders.com", description: "HTTP Security Header Checker", icon: Shield, category: "SSL" },
-  { name: "WPScan", description: "WordPress Security Scanner", icon: Fingerprint, category: "CMS" },
   { name: "Nmap", description: "Port Scanner & Service Detector", icon: Server, category: "Recon" },
-  { name: "Metasploit", description: "Exploit Verification Framework", icon: Skull, category: "Exploits" },
+  { name: "Subfinder", description: "Subdomain Discovery Tool", icon: Link, category: "Recon" },
+  { name: "Gobuster", description: "Directory & File Discovery", icon: FolderSearch, category: "Recon" },
+  { name: "ffuf", description: "Endpoint Fuzzer", icon: Terminal, category: "Recon" },
+  { name: "WhatWeb", description: "Technology Fingerprinting", icon: Fingerprint, category: "Recon" },
+  { name: "Nuclei", description: "Template-based CVE Scanner", icon: Cpu, category: "Vulnerability" },
+  { name: "Nikto", description: "Web Server Scanner", icon: Globe, category: "Web" },
+  { name: "Retire.js", description: "Outdated JS Library Detector", icon: Search, category: "Web" },
+  { name: "SQLMap", description: "SQL Injection Testing Tool", icon: Database, category: "Injection" },
+  { name: "Dalfox", description: "XSS Parameter Scanner", icon: Sparkles, category: "Injection" },
+  { name: "sslscan", description: "SSL/TLS Configuration Auditor", icon: ShieldAlert, category: "SSL" },
+  { name: "Security Headers", description: "HTTP Security Header Checker", icon: Shield, category: "SSL" },
+  { name: "WPScan", description: "WordPress Security Scanner", icon: Cpu, category: "CMS" },
 ];
 
 export default function Index() {
@@ -92,7 +88,7 @@ export default function Index() {
   const { user } = useAuth();
   const [activeCategory, setActiveCategory] = useState("All");
 
-  const categories = ["All", "Recon", "Web", "Vulnerability", "XSS", "SSL", "CMS", "Authentication", "Exploits"];
+  const categories = ["All", "Recon", "Web", "Vulnerability", "Injection", "SSL", "CMS"];
 
   const filteredTools = activeCategory === "All"
     ? tools

@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { Shield, Scan, FileText, BarChart3, Settings, Home } from "lucide-react";
+import { Shield, Scan, FileText, BarChart3, Settings, Home, BookOpen } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,6 +17,7 @@ const navigation = [
   { title: "Scanner", url: "/scanner", icon: Scan },
   { title: "Results", url: "/results", icon: BarChart3 },
   { title: "Reports", url: "/reports", icon: FileText },
+  { title: "Guide", url: "/guide", icon: BookOpen },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 

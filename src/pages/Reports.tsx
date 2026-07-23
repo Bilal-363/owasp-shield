@@ -70,8 +70,12 @@ const reportTemplates = [
 
 export default function Reports() {
   const [selectedScans, setSelectedScans] = useState<string[]>([]);
-  const [reportFormat, setReportFormat] = useState("pdf");
-  const [reportTemplate, setReportTemplate] = useState("executive");
+  const [reportFormat, setReportFormat] = useState(() => {
+    return localStorage.getItem("owasp_shield_report_format") || "pdf";
+  });
+  const [reportTemplate, setReportTemplate] = useState(() => {
+    return localStorage.getItem("owasp_shield_report_template") || "executive";
+  });
   const [availableReports, setAvailableReports] = useState<ScanData[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +85,14 @@ export default function Reports() {
   const [totalScans, setTotalScans] = useState(0);
   const ITEMS_PER_PAGE = 50;
   const { toast } = useToast();
+
+  useEffect(() => {
+    localStorage.setItem("owasp_shield_report_format", reportFormat);
+  }, [reportFormat]);
+
+  useEffect(() => {
+    localStorage.setItem("owasp_shield_report_template", reportTemplate);
+  }, [reportTemplate]);
 
   useEffect(() => {
     const fetchReportData = async () => {

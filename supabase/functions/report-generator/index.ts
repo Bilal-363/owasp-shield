@@ -16,12 +16,19 @@ function escapeHtml(text: string): string {
 
 // SECURITY FIX: Restrict CORS to specific origins
 const getCorsHeaders = (origin?: string) => {
+  // Env-driven allowlist so production (Vercel) origins work too.
+  // Set ALLOWED_ORIGINS in the Supabase function secrets, comma-separated.
+  const envOrigins = (Deno.env.get('ALLOWED_ORIGINS') || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const allowedOrigins = [
     'http://localhost:8080',
     'http://127.0.0.1:8080',
     'http://localhost:3000',
+    ...envOrigins,
   ];
-  
+
   const isAllowed = origin && allowedOrigins.includes(origin);
   
   return {

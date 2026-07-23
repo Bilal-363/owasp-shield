@@ -177,6 +177,7 @@ export type Database = {
         Row: {
           completed_at: string | null
           created_at: string
+          critical_findings: number | null
           error_message: string | null
           high_risk_findings: number | null
           id: string
@@ -195,6 +196,7 @@ export type Database = {
         Insert: {
           completed_at?: string | null
           created_at?: string
+          critical_findings?: number | null
           error_message?: string | null
           high_risk_findings?: number | null
           id?: string
@@ -213,6 +215,7 @@ export type Database = {
         Update: {
           completed_at?: string | null
           created_at?: string
+          critical_findings?: number | null
           error_message?: string | null
           high_risk_findings?: number | null
           id?: string

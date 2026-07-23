@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { scannerApi } from "@/lib/scannerApi";
 import { useAuth } from "./useAuth";
 import { useToast } from "./use-toast";
 
@@ -11,6 +12,7 @@ export interface ScanData {
   started_at: string;
   completed_at?: string;
   total_findings: number;
+  critical_findings?: number;
   high_risk_findings: number;
   medium_risk_findings: number;
   low_risk_findings: number;
@@ -35,7 +37,7 @@ export interface Finding {
   scan_id: string;
   tool: string;
   owasp_category: string;
-  severity: 'High' | 'Medium' | 'Low' | 'Info';
+  severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
   title: string;
   description?: string;
   evidence?: string;
@@ -52,7 +54,7 @@ interface ScanOrchestratorContextType {
   scanLogs: ScanLog[];
   findings: Finding[];
   loading: boolean;
-  startScan: (targetUrl: string, tools: string[], scanConfig?: any) => Promise<string | null>;
+  startScan: (targetUrl: string, tools: string[], profile?: 'quick' | 'deep') => Promise<string | null>;
   stopScan: (scanId: string) => Promise<void>;
   getScanHistory: () => Promise<any[]>;
   getScanDetails: (scanId: string) => Promise<any>;
@@ -70,11 +72,38 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
   const [loading, setLoading] = useState(false);
 
   const currentScanIdRef = useRef<string | null>(null);
-  const advanceIntervalRef = useRef<any>(null);
 
   useEffect(() => {
     currentScanIdRef.current = currentScan?.id || null;
   }, [currentScan?.id]);
+
+  // Load active running scan on mount or session change
+  useEffect(() => {
+    if (!session?.user) return;
+
+    const loadActiveScan = async () => {
+      try {
+        const { data: activeScan } = await supabase
+          .from('scans')
+          .select('*')
+          .eq('user_id', session.user.id)
+          .in('status', ['running', 'pending'])
+          .order('started_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (activeScan) {
+          setCurrentScan(activeScan as ScanData);
+          currentScanIdRef.current = activeScan.id;
+          await refreshScanData(activeScan.id);
+        }
+      } catch (err) {
+        console.error("Error loading active scan:", err);
+      }
+    };
+
+    loadActiveScan();
+  }, [session?.user]);
 
   // Set up real-time subscriptions for live updates
   useEffect(() => {
@@ -94,7 +123,9 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
         (payload) => {
           console.log('Scan update:', payload);
           if (payload.new) {
-            setCurrentScan(payload.new as any);
+            if (!currentScanIdRef.current || currentScanIdRef.current === (payload.new as any).id) {
+              setCurrentScan(payload.new as any);
+            }
           }
         }
       )
@@ -151,68 +182,38 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
     };
   }, [session?.user]);
 
+
   // ========================================================================
-  // FIX #2: Step-based polling via Edge Function "advance" action
-  // ========================================================================
-  // When a scan is running, poll the edge function to advance one step at a
-  // time. Each call processes exactly one step server-side and returns.
-  // This replaces the old fire-and-forget pattern that was killed by the
-  // serverless runtime.
+  // The REAL scan runs on the backend and streams results into Supabase.
+  // The realtime subscriptions above update currentScan/logs/findings live.
+  // This effect just does a safety refresh when a scan finishes and clears
+  // the loading state. (No fake client-side stepping / fabricated findings.)
   // ========================================================================
   useEffect(() => {
-    if (!session?.access_token || !currentScan?.id) return;
-
-    // Only poll if scan is running
-    if (currentScan.status !== 'running') {
-      if (advanceIntervalRef.current) {
-        clearInterval(advanceIntervalRef.current);
-        advanceIntervalRef.current = null;
-      }
-      return;
+    if (!currentScan?.id) return;
+    if (
+      currentScan.status === 'completed' ||
+      currentScan.status === 'failed' ||
+      currentScan.status === 'cancelled'
+    ) {
+      refreshScanData(currentScan.id);
     }
+  }, [currentScan?.id, currentScan?.status]);
 
-    const advanceScan = async () => {
-      try {
-        const response = await supabase.functions.invoke('scan-orchestrator', {
-          body: {
-            action: 'advance',
-            scanId: currentScan.id,
-          },
-        });
-
-        if (response.error) {
-          console.error('Advance scan error:', response.error);
-          return;
-        }
-
-        const data = response.data;
-
-        // Fetch updated data from DB for accurate state
-        await refreshScanData(currentScan.id);
-
-        // If scan completed or failed, stop polling
-        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
-          if (advanceIntervalRef.current) {
-            clearInterval(advanceIntervalRef.current);
-            advanceIntervalRef.current = null;
-          }
-        }
-      } catch (err) {
-        console.error("Error advancing scan:", err);
-      }
-    };
-
-    // Start polling every 2 seconds
-    advanceScan(); // Advance immediately
-    advanceIntervalRef.current = setInterval(advanceScan, 2000);
-
-    return () => {
-      if (advanceIntervalRef.current) {
-        clearInterval(advanceIntervalRef.current);
-        advanceIntervalRef.current = null;
-      }
-    };
-  }, [session?.access_token, currentScan?.id, currentScan?.status]);
+  // ========================================================================
+  // Fallback POLLING: Supabase Realtime may not be enabled on every project,
+  // so while a scan is running we also poll the DB every 2.5s to keep progress,
+  // logs and findings live. (Realtime, when on, updates instantly; this just
+  // guarantees the UI never gets stuck.)
+  // ========================================================================
+  useEffect(() => {
+    if (!currentScan?.id || currentScan.status !== 'running') return;
+    const scanId = currentScan.id;
+    const interval = setInterval(() => {
+      refreshScanData(scanId);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [currentScan?.id, currentScan?.status]);
 
   // Refresh scan data, logs, and findings from database
   const refreshScanData = async (scanId: string) => {
@@ -251,10 +252,11 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
   };
 
   // ========================================================================
-  // FIX #5: All database writes go through the Edge Function only.
-  // No client-side fallback database inserts.
+  // Start a REAL scan on the backend. The backend validates the target,
+  // enforces rate limits, runs genuine checks, and streams findings/logs
+  // into Supabase — which the realtime subscriptions above render live.
   // ========================================================================
-  const startScan = async (targetUrl: string, tools: string[], scanConfig: any = {}) => {
+  const startScan = async (targetUrl: string, tools: string[], profile: 'quick' | 'deep' = 'quick') => {
     if (!session?.access_token) {
       toast({
         title: "Authentication Required",
@@ -269,23 +271,9 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
     setFindings([]);
 
     try {
-      // All scan creation goes through the Edge Function (service_role)
-      const response = await supabase.functions.invoke('scan-orchestrator', {
-        body: {
-          action: 'start',
-          targetUrl,
-          tools,
-          scanConfig,
-        },
-      });
+      const { scanId } = await scannerApi.startScan(targetUrl, tools, profile);
 
-      if (response.error) {
-        throw new Error(response.error.message || 'Edge Function error');
-      }
-
-      const scanId = response.data.scanId;
-
-      // Fetch initial scan data from DB (read-only, allowed by RLS)
+      // Fetch the freshly-created scan row (read-only, allowed by RLS).
       const { data, error: scanError } = await supabase
         .from('scans')
         .select('*')
@@ -293,14 +281,13 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
         .single();
 
       if (scanError) throw scanError;
-      const scanData = data as ScanData;
 
-      setCurrentScan(scanData);
+      setCurrentScan(data as ScanData);
       currentScanIdRef.current = scanId;
 
       toast({
         title: "Scan Started",
-        description: `Security scan initiated for ${targetUrl}`,
+        description: `Live security scan running against ${targetUrl}`,
       });
 
       return scanId;
@@ -308,7 +295,9 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
       console.error('Start scan error:', error);
       toast({
         title: "Scan Failed",
-        description: error.message || "Failed to start security scan. Please ensure the Edge Function is deployed.",
+        description:
+          error.message ||
+          "Could not reach the scanner backend. Is it running (npm start in scanner-backend)?",
         variant: "destructive",
       });
       return null;
@@ -318,35 +307,18 @@ export const ScanOrchestratorProvider = ({ children }: { children: React.ReactNo
   };
 
   // ========================================================================
-  // Stop scan — goes through Edge Function only
+  // Stop scan — asks the backend to cancel; the running scan checks for this.
   // ========================================================================
   const stopScan = async (scanId: string) => {
     if (!session?.access_token) return;
 
     try {
-      const response = await supabase.functions.invoke('scan-orchestrator', {
-        body: {
-          action: 'stop',
-          scanId,
-        },
-      });
-
-      if (response.error) {
-        throw new Error(response.error.message || 'Failed to stop scan');
-      }
-
-      // Stop the advance polling
-      if (advanceIntervalRef.current) {
-        clearInterval(advanceIntervalRef.current);
-        advanceIntervalRef.current = null;
-      }
-
-      // Refresh from DB
+      await scannerApi.stopScan(scanId);
       await refreshScanData(scanId);
 
       toast({
         title: "Scan Stopped",
-        description: "Security scan has been terminated.",
+        description: "Security scan has been cancelled.",
       });
     } catch (error: any) {
       console.error('Stop scan error:', error);

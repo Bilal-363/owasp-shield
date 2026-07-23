@@ -1,0 +1,22 @@
+# One-command run: `docker compose up --build`
+# Reads secrets from ./.env (copy from .env.example first).
+services:
+  scanner:
+    build: .
+    image: owasp-shield-scanner:latest
+    container_name: shield-scanner
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # A vulnerable practice lab you can legally scan lives on the same network.
+    # Uncomment to bring up OWASP Juice Shop at http://juice:3000
+    # depends_on:
+    #   - juice
+
+  # juice:
+  #   image: bkimminich/juice-shop
+  #   container_name: juice-shop
+  #   ports:
+  #     - "3000:3000"

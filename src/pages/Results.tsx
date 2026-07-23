@@ -20,6 +20,8 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 
+import jsPDF from 'jspdf';
+
 interface Finding {
   id: string;
   scan_id: string;
@@ -45,6 +47,15 @@ interface ScanData {
   high_risk_findings: number;
   medium_risk_findings: number;
   low_risk_findings: number;
+}
+
+// Turn an affected_url (which may be a full URL, a host, or "host:port") into
+// something a browser can actually open in a new tab.
+function toClickableUrl(raw: string): string {
+  if (!raw) return "#";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  // "host:22" / "host:3306" etc. — non-web ports, just point at the host over http
+  return `http://${raw}`;
 }
 
 export default function Results() {
@@ -115,62 +126,208 @@ export default function Results() {
 
   const generateReport = async (scanId: string) => {
     try {
-      let success = false;
-      try {
-        const { data, error } = await supabase.functions.invoke('report-generator', {
-          body: { scanId, format: 'pdf' }
-        });
+      // Fetch scan details
+      const targetScan = scanHistory.find(s => s.id === scanId);
+      const targetUrl = targetScan?.target_url || "Target URL";
 
-        if (error) throw error;
+      // Fetch findings for this specific scan
+      const { data: scanFindings, error: findingsError } = await supabase
+        .from('findings')
+        .select('*')
+        .eq('scan_id', scanId);
 
-        if (data?.downloadUrl) {
-          // Create a temporary link to download the file
-          const link = document.createElement('a');
-          link.href = data.downloadUrl;
-          link.download = `security-report-${scanId}.pdf`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          success = true;
+      if (findingsError) throw findingsError;
+
+      const findingsList: Finding[] = scanFindings || [];
+
+      // Generate text-based PDF using jsPDF
+      const pdf = new jsPDF();
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 15;
+      const contentWidth = pageWidth - margin * 2;
+      let y = margin;
+
+      const severityColors: Record<string, [number, number, number]> = {
+        'Critical': [220, 38, 38],
+        'High': [217, 119, 6],
+        'Medium': [234, 88, 12],
+        'Low': [37, 99, 235],
+        'Info': [107, 114, 128],
+      };
+
+      const addFooter = (pageNum: number) => {
+        pdf.setFontSize(8);
+        pdf.setTextColor(150, 150, 150);
+        pdf.text(`OWASP Shield Desk — Security Report — Page ${pageNum}`, pageWidth / 2, pageHeight - 8, { align: 'center' });
+        pdf.text('CONFIDENTIAL', pageWidth - margin, pageHeight - 8, { align: 'right' });
+      };
+
+      const checkPage = (requiredHeight: number) => {
+        if (y + requiredHeight > pageHeight - 20) {
+          addFooter(pdf.getNumberOfPages());
+          pdf.addPage();
+          y = margin;
         }
-      } catch (invokeError) {
-        console.warn("Edge function report generator offline, running local fallback:", invokeError);
-        
-        toast({
-          title: "Edge Function Offline",
-          description: "Downloading raw findings. Please use the 'Reports' tab for advanced PDF and HTML generation.",
-        });
+      };
 
-        // Fallback: Fetch findings and download as JSON
-        const { data: findingsData, error: findingsError } = await supabase
-          .from('findings')
-          .select('*')
-          .eq('scan_id', scanId);
+      // ---- Header Section ----
+      pdf.setFontSize(22);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Security Assessment Report', pageWidth / 2, 25, { align: 'center' });
 
-        if (findingsError) throw findingsError;
+      pdf.setFontSize(10);
+      pdf.setTextColor(100, 100, 100);
+      pdf.text(`Target: ${targetUrl}`, pageWidth / 2, 33, { align: 'center' });
+      pdf.text(`Generated: ${new Date().toLocaleString()}`, pageWidth / 2, 40, { align: 'center' });
 
-        const jsonData = JSON.stringify(findingsData || [], null, 2);
-        const blob = new Blob([jsonData], { type: "application/json" });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `scan-findings-${scanId}-${Date.now()}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        success = true;
+      pdf.setDrawColor(12, 74, 110);
+      pdf.setLineWidth(0.5);
+      pdf.line(margin, 46, pageWidth - margin, 46);
+      y = 54;
+
+      // ---- Executive Summary ----
+      pdf.setFontSize(16);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Executive Summary', margin, y);
+      y += 8;
+
+      const criticalCount = findingsList.filter(f => f.severity === 'Critical').length;
+      const highCount = findingsList.filter(f => f.severity === 'High').length;
+      const mediumCount = findingsList.filter(f => f.severity === 'Medium').length;
+      const lowCount = findingsList.filter(f => f.severity === 'Low').length;
+
+      pdf.setFontSize(10);
+      pdf.setTextColor(50, 50, 50);
+      const summaryText = `Security assessment performed for ${targetUrl}. Total ${findingsList.length} vulnerability findings detected.`;
+      const summaryLines = pdf.splitTextToSize(summaryText, contentWidth);
+      pdf.text(summaryLines, margin, y);
+      y += summaryLines.length * 5 + 6;
+
+      // Summary table
+      const colWidth = contentWidth / 5;
+      const labels = ['Total', 'Critical', 'High', 'Medium', 'Low'];
+      const counts = [findingsList.length, criticalCount, highCount, mediumCount, lowCount];
+      const bgColors: [number, number, number][] = [
+        [241, 245, 249], [254, 226, 226], [255, 237, 213], [254, 249, 195], [219, 234, 254]
+      ];
+
+      for (let i = 0; i < labels.length; i++) {
+        const x = margin + i * colWidth;
+        pdf.setFillColor(...bgColors[i]);
+        pdf.rect(x, y, colWidth, 9, 'F');
+        pdf.setDrawColor(200, 200, 200);
+        pdf.rect(x, y, colWidth, 9, 'S');
+        pdf.setFontSize(9);
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(labels[i], x + colWidth / 2, y + 6, { align: 'center' });
+      }
+      y += 9;
+
+      for (let i = 0; i < counts.length; i++) {
+        const x = margin + i * colWidth;
+        pdf.setDrawColor(200, 200, 200);
+        pdf.rect(x, y, colWidth, 9, 'S');
+        pdf.setFontSize(12);
+        pdf.setTextColor(30, 30, 30);
+        pdf.text(String(counts[i]), x + colWidth / 2, y + 6.5, { align: 'center' });
+      }
+      y += 16;
+
+      // ---- Detailed Findings ----
+      pdf.setFontSize(16);
+      pdf.setTextColor(12, 74, 110);
+      pdf.text('Detailed Security Findings', margin, y);
+      y += 8;
+      pdf.setDrawColor(12, 74, 110);
+      pdf.line(margin, y, pageWidth - margin, y);
+      y += 8;
+
+      if (findingsList.length === 0) {
+        pdf.setFontSize(10);
+        pdf.setTextColor(100, 100, 100);
+        pdf.text('No security findings recorded for this scan.', margin, y);
+      } else {
+        for (let idx = 0; idx < findingsList.length; idx++) {
+          const finding = findingsList[idx];
+          checkPage(45);
+
+          // Severity Badge
+          const sevColor = severityColors[finding.severity] || [100, 100, 100];
+          pdf.setFillColor(...sevColor);
+          pdf.roundedRect(margin, y, 22, 5.5, 1, 1, 'F');
+          pdf.setFontSize(8);
+          pdf.setTextColor(255, 255, 255);
+          pdf.text(finding.severity || 'Info', margin + 11, y + 4, { align: 'center' });
+
+          // OWASP Category
+          if (finding.owasp_category) {
+            pdf.setFillColor(241, 245, 249);
+            pdf.roundedRect(margin + 24, y, 60, 5.5, 1, 1, 'F');
+            pdf.setTextColor(71, 85, 105);
+            pdf.text(finding.owasp_category, margin + 54, y + 4, { align: 'center' });
+          }
+          y += 9;
+
+          // Title
+          pdf.setFontSize(11);
+          pdf.setTextColor(15, 23, 42);
+          const titleLines = pdf.splitTextToSize(`${idx + 1}. ${finding.title}`, contentWidth);
+          pdf.text(titleLines, margin, y);
+          y += titleLines.length * 5 + 2;
+
+          // Description
+          if (finding.description) {
+            checkPage(12);
+            pdf.setFontSize(9);
+            pdf.setTextColor(51, 65, 85);
+            const descLines = pdf.splitTextToSize(`Description: ${finding.description}`, contentWidth - 4);
+            pdf.text(descLines, margin + 2, y);
+            y += descLines.length * 4.5 + 2;
+          }
+
+          // Affected URL
+          if (finding.affected_url) {
+            checkPage(10);
+            pdf.setFontSize(9);
+            pdf.setTextColor(2, 132, 199);
+            const urlLines = pdf.splitTextToSize(`Affected URL: ${finding.affected_url}`, contentWidth - 4);
+            pdf.text(urlLines, margin + 2, y);
+            y += urlLines.length * 4.5 + 2;
+          }
+
+          // Recommendation
+          if (finding.recommendation) {
+            checkPage(14);
+            pdf.setFillColor(239, 246, 255);
+            const recLines = pdf.splitTextToSize(`Recommendation: ${finding.recommendation}`, contentWidth - 8);
+            const recHeight = recLines.length * 4.5 + 5;
+            pdf.roundedRect(margin, y, contentWidth, recHeight, 2, 2, 'F');
+            pdf.setFontSize(9);
+            pdf.setTextColor(30, 58, 138);
+            pdf.text(recLines, margin + 4, y + 4);
+            y += recHeight + 4;
+          }
+
+          y += 3;
+          pdf.setDrawColor(230, 230, 230);
+          pdf.line(margin + 5, y, pageWidth - margin - 5, y);
+          y += 5;
+        }
       }
 
-      if (success) {
-        toast({
-          title: "Report Generated",
-          description: "Your security report has been downloaded.",
-        });
-      }
+      addFooter(pdf.getNumberOfPages());
+      pdf.save(`security-report-${scanId.slice(0, 8)}.pdf`);
+
+      toast({
+        title: "PDF Report Generated",
+        description: "Your security report has been downloaded as PDF.",
+      });
     } catch (error) {
-      console.error('Error generating report:', error);
+      console.error('Error generating PDF report:', error);
       toast({
         title: "Error",
-        description: "Failed to generate report. Please try again.",
+        description: "Failed to generate PDF report. Please try again.",
         variant: "destructive",
       });
     }
@@ -359,10 +516,17 @@ export default function Results() {
                       <div>
                         <h4 className="font-semibold mb-2">Affected URL</h4>
                         <div className="flex items-center gap-2">
-                          <code className="px-2 py-1 bg-muted rounded text-sm">{finding.affected_url}</code>
-                          <Button variant="ghost" size="sm">
-                            <ExternalLink className="h-4 w-4" />
-                          </Button>
+                          <code className="px-2 py-1 bg-muted rounded text-sm break-all">{finding.affected_url}</code>
+                          <a
+                            href={toClickableUrl(finding.affected_url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open in a new tab"
+                          >
+                            <Button variant="ghost" size="sm">
+                              <ExternalLink className="h-4 w-4" />
+                            </Button>
+                          </a>
                         </div>
                       </div>
                     )}
