@@ -85,6 +85,22 @@ export default function Guide() {
       </Alert>
 
       {/* Steps */}
+      {/* Getting started */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Getting started (first time)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
+            <li><span className="text-foreground font-medium">Create an account / sign in</span> on the Auth page.</li>
+            <li><span className="text-foreground font-medium">Make sure the scanner backend is running</span> — scans need it. If a scan fails instantly, the backend isn&apos;t running.</li>
+            <li>Open <span className="text-foreground font-medium">Scanner</span>, enter a target URL you own or are authorized to test.</li>
+            <li>Pick <span className="text-foreground font-medium">Quick</span> or <span className="text-foreground font-medium">Deep</span>, choose tools (or leave all), and press <span className="text-foreground font-medium">Start</span>.</li>
+            <li>Watch findings appear on <span className="text-foreground font-medium">Results</span>, then export a report from <span className="text-foreground font-medium">Reports</span>.</li>
+          </ol>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 sm:grid-cols-2">
         {steps.map((s) => (
           <Card key={s.title}>
@@ -144,6 +160,42 @@ export default function Guide() {
             <div key={t.name} className="text-sm">
               <span className="font-mono font-semibold text-foreground">{t.name}</span>
               <span className="text-muted-foreground"> — {t.desc}</span>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* FAQ */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">FAQ</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          {[
+            {
+              q: "A scan failed instantly — why?",
+              a: "The scanner backend isn't reachable. Make sure it's running and that you're logged in.",
+            },
+            {
+              q: "How long does a scan take?",
+              a: "A Quick scan is a few minutes. A Deep scan (full templates, sqlmap, etc.) can take much longer — that's the real tools being thorough, not a freeze. Progress and logs update live.",
+            },
+            {
+              q: "Why did it find nothing / only Info items?",
+              a: "A well-configured site can legitimately be clean. The scanner only reports what it actually observes — it never invents findings.",
+            },
+            {
+              q: "Can I scan any website?",
+              a: "No. Only scan sites you own or have written permission to test. Unauthorized scanning is illegal.",
+            },
+            {
+              q: "Some tools show as skipped — why?",
+              a: "Heavier tools (nmap, nuclei, sqlmap…) only run when installed on the backend. The built-in checks always run.",
+            },
+          ].map((item) => (
+            <div key={item.q}>
+              <p className="font-medium text-foreground">{item.q}</p>
+              <p className="text-muted-foreground">{item.a}</p>
             </div>
           ))}
         </CardContent>
